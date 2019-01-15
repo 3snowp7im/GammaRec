@@ -1,0 +1,862 @@
+#!/usr/bin/env python3
+import configparser
+import gi
+gi.require_version('GLib', '2.0')
+gi.require_version('GObject', '2.0')
+gi.require_version('Gst', '1.0')
+gi.require_version('GstVideo', '1.0')
+gi.require_version('Gtk', '3.0')
+gi.require_version('Gdk', '3.0')
+from gi.repository import GLib, GObject, Gst, GstVideo, Gtk, GdkX11
+import os
+import re
+import signal
+import sys
+import time
+
+class GRVideoDevice:
+
+    @classmethod
+    def load(cls, device):
+        caps = GRVideoDevice.get_caps(device)
+        if len(caps) > 0:
+            return GRVideoDevice(device.get_display_name(), device, caps)
+
+    @classmethod
+    def get_caps(cls, device):
+        caps = []
+        def foreach_cap(features, cap):
+            parsed_cap = GRVideoCap.parse(cap)
+            if not parsed_cap == None:
+                caps.append(parsed_cap)
+            return True
+        device.get_caps().foreach(foreach_cap)
+        return caps
+
+    def __init__(self, label, device, caps):
+        self.label = label
+        self.device = device
+        self.caps = caps
+
+class GRVideoCap:
+
+    @classmethod
+    def parse(cls, cap):
+        fmt = cap.get_string('format')
+        framerates = GRVideoCap.get_framerates(cap)
+        if not fmt == None and len(framerates) > 0:
+            width = cap.get_int('width').value
+            height = cap.get_int('height').value
+            par = cap.get_fraction('pixel-aspect-ratio')
+            label = '%s %dx%d %d:%d' % (fmt, width, height, par.value_numerator, par.value_denominator)
+            return GRVideoCap(label, cap, framerates)
+
+    @classmethod
+    def get_framerates(cls, cap):
+        framerates = []
+        cap_str = cap.to_string()
+        if re.search(r'framerate=\(fraction\)\{', cap_str):
+            # Introspection is broken for GstFraction, so parse the framerate
+            # from gstreamer's human readable string.
+            for string in re.findall(r'framerate=\(fraction\)\{([^}]+)\}', cap_str)[0].strip(' ').split(', '):
+                fraction = string.split('/')
+                framerate = Gst.Fraction()
+                framerate.value_numerator = int(fraction[0])
+                framerate.value_denominator = int(fraction[1])
+                framerate_ = GRVideoFramerate.parse(framerate)
+                if not framerate_ == None:
+                    framerates.append(framerate_)
+        else:
+            framerate_ = GRVideoFramerate.parse(cap.get_fraction('framerate'))
+            if not framerate_ == None:
+                framerates.append(framerate_)
+        return framerates
+
+    def __init__(self, label, cap, framerates):
+        self.cap = cap
+        self.label = label
+        self.framerates = framerates
+
+class GRVideoFramerate:
+
+    @classmethod
+    def parse(cls, framerate):
+        if framerate.value_denominator == 0:
+            return None
+        fraction = int(100 * float(framerate.value_numerator) / float(framerate.value_denominator))
+        if fraction % 100 > 0:
+            return GRVideoFramerate(str(fraction / 100.), framerate)
+        return GRVideoFramerate(str(int(fraction / 100)), framerate)
+
+    def __init__(self, label, framerate):
+        self.label = label
+        self.framerate = framerate
+
+class GRAudioDevice:
+
+    @classmethod
+    def load(cls, device):
+        return GRAudioDevice(device.get_display_name(), device)
+
+    def __init__(self, label, device):
+        self.label = label
+        self.device = device
+
+class GRVideoDeviceDialog(Gtk.Dialog):
+
+    def __init__(self, parent, devices, video_capture):
+        Gtk.Dialog.__init__(self)
+        self.set_transient_for(parent)
+        self.set_title('Configure video device')
+        self.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL, Gtk.STOCK_OK, Gtk.ResponseType.OK)
+        self.device_store = Gtk.ListStore(str, object)
+        for device in devices:
+            self.device_store.append([device.label, device])
+        device_label = Gtk.Label()
+        device_label.set_halign(Gtk.Align.START)
+        device_label.set_text('Device: ')
+        device_combo = Gtk.ComboBox.new_with_model(self.device_store)
+        device_combo.connect('changed', self.device_changed)
+        device_renderer_text = Gtk.CellRendererText()
+        device_combo.pack_start(device_renderer_text, True)
+        device_combo.add_attribute(device_renderer_text, 'text', 0)
+        cap_label = Gtk.Label()
+        cap_label.set_halign(Gtk.Align.START)
+        cap_label.set_text('Format: ')
+        self.cap_store = Gtk.ListStore(str, object)
+        self.cap_combo = Gtk.ComboBox.new_with_model(self.cap_store)
+        self.cap_combo.connect('changed', self.cap_changed)
+        cap_renderer_text = Gtk.CellRendererText()
+        self.cap_combo.pack_start(cap_renderer_text, True)
+        self.cap_combo.add_attribute(cap_renderer_text, 'text', 0)
+        framerate_label = Gtk.Label()
+        framerate_label.set_halign(Gtk.Align.START)
+        framerate_label.set_text('Framerate: ')
+        self.framerate_store = Gtk.ListStore(str, object)
+        self.framerate_combo = Gtk.ComboBox.new_with_model(self.framerate_store)
+        self.framerate_combo.connect('changed', self.framerate_changed)
+        framerate_renderer_text = Gtk.CellRendererText()
+        self.framerate_combo.pack_start(framerate_renderer_text, True)
+        self.framerate_combo.add_attribute(framerate_renderer_text, 'text', 0)
+        grid = Gtk.Grid()
+        grid.attach(device_label, 0, 0, 1, 1)
+        grid.attach(device_combo, 1, 0, 1, 1)
+        grid.attach(cap_label, 0, 1, 1, 1)
+        grid.attach(self.cap_combo, 1, 1, 1, 1)
+        grid.attach(framerate_label, 0, 2, 1, 1)
+        grid.attach(self.framerate_combo, 1, 2, 1, 1)
+        box = Gtk.Box()
+        box.pack_start(grid, False, False, 12)
+        self.get_content_area().add(box)
+        self.device = video_capture.get('device', '')
+        self.cap = video_capture.get('cap', '')
+        self.framerate = video_capture.get('framerate', '')
+        device_found = False
+        for i in range(0, len(devices)):
+            if devices[i].label == self.device:
+                device_found = True
+                device_combo.set_active(i)
+                break
+        if len(devices) > 0:
+            if not device_found:
+                device_combo.set_active(0)
+                self.device_changed(device_combo)
+        else:
+            device_combo.set_active(-1)
+        self.show_all()
+
+    def device_changed(self, device_combo):
+        if device_combo.get_active() >= 0:
+            device = self.device_store[device_combo.get_active()][1]
+            self.device = device.label
+            self.cap_store.clear()
+            cap_found = False
+            for i in range(0, len(device.caps)):
+                self.cap_store.append([device.caps[i].label, device.caps[i]])
+                if not cap_found and device.caps[i].label == self.cap:
+                    cap_found = True
+                    self.cap_combo.set_active(i)
+            if not cap_found:
+                self.cap_combo.set_active(0)
+                self.cap_changed(self.cap_combo)
+
+    def cap_changed(self, cap_combo):
+        if cap_combo.get_active() >= 0:
+            cap = self.cap_store[cap_combo.get_active()][1]
+            self.cap = cap.label
+            self.framerate_store.clear()
+            framerate_found = False
+            for i in range(0, len(cap.framerates)):
+                self.framerate_store.append([cap.framerates[i].label, cap.framerates[i]])
+                if not framerate_found and cap.framerates[i].label == self.framerate:
+                    framerate_found = True
+                    self.framerate_combo.set_active(i)
+            if not framerate_found:
+                self.framerate_combo.set_active(0)
+                self.framerate_changed(self.framerate_combo)
+
+    def framerate_changed(self, framerate_combo):
+        if framerate_combo.get_active() >= 0:
+            framerate = self.framerate_store[framerate_combo.get_active()][1]
+            self.framerate = framerate.label
+
+class GRAudioDeviceDialog(Gtk.Dialog):
+
+    def __init__(self, parent, devices, audio_capture):
+        Gtk.Dialog.__init__(self)
+        self.set_transient_for(parent)
+        self.set_title('Configure audio device')
+        self.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL, Gtk.STOCK_OK, Gtk.ResponseType.OK)
+        self.device_store = Gtk.ListStore(str, object)
+        for device in devices:
+            self.device_store.append([device.label, device])
+        device_label = Gtk.Label()
+        device_label.set_halign(Gtk.Align.START)
+        device_label.set_text('Device: ')
+        device_combo = Gtk.ComboBox.new_with_model(self.device_store)
+        device_combo.connect('changed', self.device_changed)
+        device_renderer_text = Gtk.CellRendererText()
+        device_combo.pack_start(device_renderer_text, True)
+        device_combo.add_attribute(device_renderer_text, 'text', 0)
+        grid = Gtk.Grid()
+        grid.attach(device_label, 0, 0, 1, 1)
+        grid.attach(device_combo, 1, 0, 1, 1)
+        box = Gtk.Box()
+        box.pack_start(grid, False, False, 12)
+        self.get_content_area().add(box)
+        self.device = audio_capture.get('device', '')
+        device_found = False
+        for i in range(0, len(devices)):
+            if devices[i].label == self.device:
+                device_found = True
+                device_combo.set_active(i)
+                break
+        if len(devices) > 0:
+            if not device_found:
+                device_combo.set_active(0)
+                self.device_changed(device_combo)
+        else:
+            device_combo.set_active(-1)
+        self.show_all()
+
+    def device_changed(self, device_combo):
+        if device_combo.get_active() >= 0:
+            device = self.device_store[device_combo.get_active()][1]
+            self.device = device.label
+
+class GRRecordingSettingsDialog(Gtk.Dialog):
+
+    def __init__(self, parent, recording):
+        Gtk.Dialog.__init__(self)
+        self.set_transient_for(parent)
+        self.set_title('Configure recording settings')
+        self.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL, Gtk.STOCK_OK, Gtk.ResponseType.OK)
+        preset_label = Gtk.Label()
+        preset_label.set_halign(Gtk.Align.START)
+        preset_label.set_text('Preset: ')
+        preset_store = Gtk.ListStore(str)
+        self.presets = ['ultrafast', 'superfast', 'veryfast', 'faster', 'fast', 'medium', 'slow', 'slower', 'veryslow']
+        for preset in self.presets:
+            preset_store.append([preset])
+        self.preset_combo = Gtk.ComboBox.new_with_model(preset_store)
+        preset_renderer_text = Gtk.CellRendererText()
+        self.preset_combo.pack_start(preset_renderer_text, True)
+        self.preset_combo.add_attribute(preset_renderer_text, "text", 0)
+        self.preset_combo.set_active(self.presets.index(recording.get('device', 'ultrafast')))
+        target_label = Gtk.Label()
+        target_label.set_halign(Gtk.Align.START)
+        target_label.set_text('Target: ')
+        self.targets = ['bitrate', 'quantizer', 'quality']
+        target_store = Gtk.ListStore(str)
+        for target in self.targets:
+            target_store.append([target])
+        self.target_combo = Gtk.ComboBox.new_with_model(target_store)
+        target_renderer_text = Gtk.CellRendererText()
+        self.target_combo.pack_start(target_renderer_text, True)
+        self.target_combo.add_attribute(target_renderer_text, "text", 0)
+        self.target_combo.set_active(self.targets.index(recording.get('target', 'bitrate')))
+        bitrate_label = Gtk.Label()
+        bitrate_label.set_halign(Gtk.Align.START)
+        bitrate_label.set_text('Bitrate: ')
+        self.bitrate_entry = Gtk.Entry()
+        self.bitrate_entry.set_text(recording.get('bitrate', ''))
+        quantizer_label = Gtk.Label()
+        quantizer_label.set_halign(Gtk.Align.START)
+        quantizer_label.set_text('Quantizer: ')
+        self.quantizer_spin = Gtk.SpinButton()
+        self.quantizer_spin.set_range(0, 50)
+        self.quantizer_spin.set_increments(1, 0)
+        self.quantizer_spin.set_value(int(recording.get('quantizer', '')))
+        option_string_label = Gtk.Label()
+        option_string_label.set_halign(Gtk.Align.START)
+        option_string_label.set_text('Option string: ')
+        self.option_string_entry = Gtk.Entry()
+        self.option_string_entry.set_text(recording.get('option_string', ''))
+        grid = Gtk.Grid()
+        grid.attach(preset_label, 0, 0, 1, 1)
+        grid.attach(self.preset_combo, 1, 0, 1, 1)
+        grid.attach(target_label, 0, 1, 1, 1)
+        grid.attach(self.target_combo, 1, 1, 1, 1)
+        grid.attach(bitrate_label, 0, 2, 1, 1)
+        grid.attach(self.bitrate_entry, 1, 2, 1, 1)
+        grid.attach(quantizer_label, 0, 3, 1, 1)
+        grid.attach(self.quantizer_spin, 1, 3, 1, 1)
+        grid.attach(option_string_label, 0, 4, 1, 1)
+        grid.attach(self.option_string_entry, 1, 4, 1, 1)
+        box = Gtk.Box()
+        box.pack_start(grid, False, False, 12)
+        self.get_content_area().add(box)
+        self.show_all()
+
+    def get_preset(self):
+        return self.presets[self.preset_combo.get_active()]
+
+    def get_target(self):
+        return self.targets[self.target_combo.get_active()]
+
+    def get_bitrate(self):
+        return self.bitrate_entry.get_text()
+
+    def get_quantizer(self):
+        return str(int(self.quantizer_spin.get_value()))
+
+    def get_option_string(self):
+        return self.option_string_entry.get_text()
+
+class GRMainWindow(Gtk.ApplicationWindow):
+
+    __gsignals__ = {
+        'video-draw': (GObject.SignalFlags.RUN_LAST, None, (object, object)),
+        'video-capture-configured': (GObject.SignalFlags.RUN_LAST, None, (object,)),
+        'audio-capture-configured': (GObject.SignalFlags.RUN_LAST, None, (object,)),
+        'recording-path-set': (GObject.SignalFlags.RUN_LAST, None, (str,)),
+        'recording-start': (GObject.SignalFlags.RUN_LAST, None, tuple()),
+        'recording-stop': (GObject.SignalFlags.RUN_LAST, None, tuple()),
+        'recording-settings-configured': (GObject.SignalFlags.RUN_LAST, None, (object,)),
+    }
+
+    def __init__(self, app, config, video_devices, audio_devices):
+        Gtk.Window.__init__(self, title='GammaRec', application=app)
+        self.config = config
+        self.set_resizable(False)
+        # Create video device button
+        self.video_device_button = Gtk.Button.new_from_icon_name('camera-video-symbolic', Gtk.IconSize.LARGE_TOOLBAR)
+        self.video_device_button.show()
+        self.video_device_button.connect('clicked', self.video_device_button_clicked, video_devices)
+        # Create audio device button
+        self.audio_device_button = Gtk.Button.new_from_icon_name('audio-input-microphone-symbolic', Gtk.IconSize.LARGE_TOOLBAR)
+        self.audio_device_button.show()
+        self.audio_device_button.connect('clicked', self.audio_device_button_clicked, audio_devices)
+        # Create button for choosing output recording
+        self.recording_path_button = Gtk.Button.new_from_icon_name('document-save-symbolic', Gtk.IconSize.LARGE_TOOLBAR)
+        self.recording_path_button.connect('clicked', self.recording_path_clicked)
+        self.recording_path_button.show()
+        # Create record and stop buttons
+        self.record_button = Gtk.Button.new_from_icon_name('media-record', Gtk.IconSize.LARGE_TOOLBAR)
+        self.record_button.connect('clicked', self.record_clicked)
+        self.record_button.show()
+        self.stop_button = Gtk.Button.new_from_icon_name('media-playback-stop-symbolic', Gtk.IconSize.LARGE_TOOLBAR)
+        self.stop_button.connect('clicked', self.stop_clicked)
+        # Create record duration label
+        self.record_duration_label = Gtk.Label()
+        # Create recording settings button
+        self.recording_settings_button = Gtk.Button.new_from_icon_name('applications-system-symbolic', Gtk.IconSize.LARGE_TOOLBAR)
+        self.recording_settings_button.connect('clicked', self.recording_settings_clicked)
+        self.recording_settings_button.show()
+        # Create control area
+        controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        controls.pack_start(self.record_button, False, False, 0)
+        controls.pack_start(self.stop_button, False, False, 0)
+        controls.pack_start(self.recording_path_button, False, False, 0)
+        controls.pack_start(self.video_device_button, False, False, 0)
+        controls.pack_start(self.audio_device_button, False, False, 0)
+        controls.pack_start(self.recording_settings_button, False, False, 0)
+        controls.pack_start(self.record_duration_label, False, False, 0)
+        controls.show()
+        # Add a vertical column
+        self.main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.main_box.pack_start(controls, False, False, 0)
+        self.main_box.show()
+        self.add(self.main_box)
+
+    def video_device_button_clicked(self, button, devices):
+        dialog = GRVideoDeviceDialog(self, devices, self.config['video'])
+        response = dialog.run()
+        if response == Gtk.ResponseType.OK:
+            self.config['video']['device'] = dialog.device
+            self.config['video']['cap'] = dialog.cap
+            self.config['video']['framerate'] = dialog.framerate
+            self.emit('video-capture-configured', self.config['video'])
+        dialog.destroy()
+
+    def audio_device_button_clicked(self, button, devices):
+        dialog = GRAudioDeviceDialog(self, devices, self.config['audio'])
+        response = dialog.run()
+        if response == Gtk.ResponseType.OK:
+            self.config['audio']['device'] = dialog.device
+            self.emit('audio-capture-configured', self.config['audio'])
+        dialog.destroy()
+
+    def recording_path_clicked(self, button):
+        dialog = Gtk.FileChooserDialog()
+        dialog.set_transient_for(self)
+        dialog.set_title('Save as')
+        dialog.set_action(Gtk.FileChooserAction.SAVE)
+        dialog.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL, Gtk.STOCK_APPLY, Gtk.ResponseType.APPLY)
+        dialog.set_filename(self.config['recording']['path'])
+        response = dialog.run()
+        if response == Gtk.ResponseType.APPLY:
+            self.config['recording']['path'] = dialog.get_filename()
+            self.emit('recording-path-set', self.config['recording']['path'])
+        dialog.destroy()
+
+    def record_clicked(self, button):
+        if len(self.config['recording']['path']) == 0:
+            self.recording_path_clicked(self.recording_path_button)
+        self.emit('recording-start')
+
+    def stop_clicked(self, button):
+        self.emit('recording-stop')
+
+    def set_recording_enabled(self, enabled):
+        self.recording_enabled = enabled
+        if enabled:
+            self.recording_path_button.hide()
+            self.record_button.hide()
+            self.stop_button.show()
+            self.video_device_button.hide()
+            self.audio_device_button.hide()
+            self.recording_settings_button.hide()
+            self.record_duration = 0
+            self.record_duration_label.show()
+            self.show_recording_duration()
+            GLib.timeout_add(1000, self.recording_duration_tick)
+        else:
+            self.recording_path_button.show()
+            self.record_button.show()
+            self.stop_button.hide()
+            self.video_device_button.show()
+            self.audio_device_button.show()
+            self.recording_settings_button.show()
+            self.record_duration_label.hide()
+
+    def show_recording_duration(self):
+        self.record_duration_label.set_markup('<span foreground="red"> %02d:%02d:%02d</span>' % (
+            self.record_duration / (60 * 60),
+            (self.record_duration / 60) % 60,
+            self.record_duration % 60,
+        ))
+
+    def recording_duration_tick(self):
+        if self.recording_enabled:
+            self.record_duration += 1
+            self.show_recording_duration()
+            return True
+        return False
+
+    def recording_settings_clicked(self, button):
+        dialog = GRRecordingSettingsDialog(self, self.config['recording'])
+        response = dialog.run()
+        if response == Gtk.ResponseType.OK:
+            self.config['recording']['preset'] = dialog.get_preset()
+            self.config['recording']['target'] = dialog.get_target()
+            self.config['recording']['bitrate'] = dialog.get_bitrate()
+            self.config['recording']['quantizer'] = dialog.get_quantizer()
+            self.config['recording']['option_string'] = dialog.get_option_string()
+            self.emit('recording-settings-configured', self.config['recording'])
+        dialog.destroy()
+
+class GR(Gtk.Application):
+
+    def __init__(self):
+        Gtk.Application.__init__(self)
+        Gst.init(None)
+
+    def do_activate(self):
+        self.active = True
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, self.quit)
+        # Get video devices
+        self.video_devices = self.get_video_devices()
+        # Get audio devices
+        self.audio_devices = self.get_audio_devices()
+        # Load configuration
+        self.load_config()
+        # Create window
+        self.window = GRMainWindow(self, self.config._sections, self.video_devices, self.audio_devices)
+        self.window.connect('delete-event', self.handle_delete_event)
+        self.window.connect('video-capture-configured', self.video_capture_configured)
+        self.window.connect('audio-capture-configured', self.audio_capture_configured)
+        self.window.connect('recording-path-set', self.recording_path_set)
+        self.window.connect('recording-start', self.start_recording)
+        self.window.connect('recording-stop', self.stop_recording)
+        self.window.connect('recording-settings-configured', self.recording_settings_configured)
+        self.window.show()
+        self.display_type = self.window.get_display().__class__.__name__
+        # Create preview elements
+        self.video_source = Gst.ElementFactory.make('v4l2src')
+        self.video_caps = Gst.ElementFactory.make('capsfilter')
+        video_tee_queue = self.make_thread_queue()
+        video_preview_convert_queue = self.make_thread_queue()
+        video_preview_convert = Gst.ElementFactory.make('glfilterbin')
+        video_preview_convert.set_property('filter', Gst.ElementFactory.make('glcolorconvert'))
+        video_tee = Gst.ElementFactory.make('tee')
+        video_sink_queue = self.make_thread_queue()
+        # Create encode convert elements
+        self.video_encode_convert_queue = self.make_thread_queue()
+        self.video_encode_convert = Gst.ElementFactory.make('glfilterbin')
+        self.video_encode_convert.set_property('filter', Gst.ElementFactory.make('glcolorconvert'))
+        # Create video sink and preview widget
+        video_sink = None
+        if self.display_type == 'X11Display':
+            video_sink = Gst.ElementFactory.make('xvimagesink')
+            self.window.video = Gtk.DrawingArea()
+        else:
+            video_sink = Gst.ElementFactory.make('gtksink')
+            self.window.video = video_sink.props.widget
+        self.window.video.set_size_request(640, 480)
+        self.window.video.show()
+        self.window.main_box.pack_start(self.window.video, True, True, 0)
+        # Create pipeline
+        self.pipeline = Gst.Pipeline()
+        # Set message callbacks
+        bus = self.pipeline.get_bus()
+        bus.add_signal_watch()
+        bus.enable_sync_message_emission()
+        #bus.connect('message', self.handle_message)
+        bus.connect("sync-message::element", self.handle_sync)
+        bus.connect('message::eos', self.handle_eos)
+        bus.connect('message::error', self.handle_error)
+        # Add elements to pipeline
+        self.pipeline.add(self.video_source)
+        self.pipeline.add(self.video_caps)
+        self.pipeline.add(video_tee_queue)
+        self.pipeline.add(video_tee)
+        self.pipeline.add(video_preview_convert_queue)
+        self.pipeline.add(video_preview_convert)
+        self.pipeline.add(video_sink_queue)
+        self.pipeline.add(video_sink)
+        self.pipeline.add(self.video_encode_convert_queue)
+        self.pipeline.add(self.video_encode_convert)
+        # Link preview elements
+        self.video_source.link(self.video_caps)
+        self.video_caps.link(video_tee_queue)
+        video_tee_queue.link(video_tee)
+        video_tee.link(video_preview_convert_queue)
+        video_preview_convert_queue.link(video_preview_convert)
+        video_preview_convert.link(video_sink_queue)
+        video_sink_queue.link(video_sink)
+        video_tee.link(self.video_encode_convert_queue)
+        self.video_encode_convert_queue.link(self.video_encode_convert)
+        # Apply configuration
+        self.set_video_capture(self.config['video'])
+        self.set_audio_capture(self.config['audio'])
+
+    def video_capture_configured(self, window, video_capture):
+        self.set_video_capture(video_capture)
+
+    def audio_capture_configured(self, window, audio_capture):
+        self.set_audio_capture(audio_capture)
+
+    def load_config(self):
+        self.config = configparser.ConfigParser()
+        self.config['recording'] = {
+            'path': '',
+            'preset': 'ultrafast',
+            'target': 'bitrate',
+            'bitrate': '5000',
+            'quantizer': '21',
+            'option_string': '',
+        }
+        self.config['video'] = {
+            'device': '',
+            'cap': '',
+            'framerate': '',
+        }
+        self.config['audio'] = {
+            'device': '',
+        }
+        if os.path.isdir(os.path.expanduser('~/.config')) and os.path.exists(os.path.expanduser('~/.config/gammarec.conf')):
+            self.config.read(os.path.expanduser('~/.config/gammarec.conf'))
+        # Load some defaults
+        if self.config['video']['device'] == '' and len(self.video_devices) > 0:
+            self.config['video']['device'] = self.video_devices[0].label
+            self.config['video']['cap'] = self.video_devices[0].caps[0].label
+            self.config['video']['framerate'] = self.video_devices[0].caps[0].framerates[0].label
+        if self.config['audio']['device'] == '' and len(self.audio_devices) > 1:
+            self.config['audio']['device'] = self.audio_devices[1].label
+
+    def save_config(self):
+        if not os.path.exists(os.path.expanduser('~/.config')):
+            os.mkdir(os.path.expanduser('~/.config'))
+        with open(os.path.expanduser('~/.config/gammarec.conf'), 'w') as configfile:
+            self.config.write(configfile)
+
+    def set_video_capture(self, video_capture):
+        self.config['video'] = {
+            'device': video_capture.get('device', ''),
+            'cap': video_capture.get('cap', ''),
+            'framerate': video_capture.get('framerate', ''),
+        }
+        for device in self.video_devices:
+            if device.label == self.config['video']['device']:
+                self.video_device = device
+                break
+        if hasattr(self, 'video_device'):
+            for cap in self.video_device.caps:
+                if cap.label == self.config['video']['cap']:
+                    self.video_cap = cap
+                    break
+        if hasattr(self, 'video_cap'):
+            for framerate in self.video_cap.framerates:
+                if framerate.label == self.config['video']['framerate']:
+                    self.video_framerate = framerate
+                    break
+        self.save_config()
+        self.pipeline.set_state(Gst.State.NULL)
+        self.start_playing()
+
+    def set_audio_capture(self, audio_capture):
+        self.config['audio'] = {
+            'device': audio_capture.get('device', ''),
+        }
+        for device in self.audio_devices:
+            if device.label == self.config['audio']['device']:
+                self.audio_device = device
+                break
+        self.save_config()
+
+    def start_playing(self):
+        if hasattr(self, 'video_device') and hasattr(self, 'video_cap') and hasattr(self, 'video_framerate'):
+            self.pipeline.set_state(Gst.State.NULL)
+            source_path = self.video_source.get_property('device')
+            device_path = self.video_device.device.get_properties().get_string('device.path')
+            if source_path != device_path:
+                self.video_source.set_property('device', device_path)
+            source_caps = self.video_caps.get_property('caps')
+            width = self.video_cap.cap.get_int('width').value
+            height = self.video_cap.cap.get_int('height').value
+            ratio_num = self.video_cap.cap.get_fraction('pixel-aspect-ratio').value_numerator
+            ratio_denom = self.video_cap.cap.get_fraction('pixel-aspect-ratio').value_denominator
+            request_caps = Gst.Caps.from_string(
+                'video/x-raw, format=%s, width=%d, height=%d, pixel-aspect-ratio=%d/%d, framerate=%d/%d' % (
+                    self.video_cap.cap.get_string('format'),
+                    width,
+                    height,
+                    ratio_num,
+                    ratio_denom,
+                    self.video_framerate.framerate.value_numerator,
+                    self.video_framerate.framerate.value_denominator,
+                )
+            )
+            if source_caps.to_string() != request_caps.to_string():
+                self.video_caps.set_property('caps', request_caps)
+            ratio = ratio_num / ratio_denom
+            self.window.video.set_size_request(int(ratio * width), height)
+            self.pipeline.set_state(Gst.State.PLAYING)
+
+    def get_video_devices(self):
+        device_monitor = Gst.DeviceMonitor.new()
+        device_monitor.add_filter('Video/Source')
+        devices = []
+        for device in device_monitor.get_devices():
+            loaded_device = GRVideoDevice.load(device)
+            if not loaded_device == None:
+                devices.append(loaded_device)
+        return devices
+
+    def get_audio_devices(self):
+        device_monitor = Gst.DeviceMonitor.new()
+        device_monitor.add_filter('Audio/Source')
+        devices = [GRAudioDevice('None', None)]
+        for device in device_monitor.get_devices():
+            loaded_device = GRAudioDevice.load(device)
+            if not loaded_device == None:
+                devices.append(loaded_device)
+        return devices
+
+    def make_thread_queue(self, name = None):
+        queue = Gst.ElementFactory.make('queue', name)
+        queue.set_property('max-size-time', 0)
+        queue.set_property('max-size-bytes', 0)
+        queue.set_property('max-size-buffers', 0)
+        return queue
+
+    def recording_path_set(self, window, recording_path):
+        self.config['recording']['path'] = recording_path
+        self.save_config()
+
+    def start_recording(self, window):
+        if self.pipeline.get_state(10).state == Gst.State.PLAYING:
+            # Stop pipeline while adding and configure elements
+            self.pipeline.set_state(Gst.State.NULL)
+            # Create mux elements
+            self.mux = Gst.ElementFactory.make('mp4mux')
+            self.filesink_queue = Gst.ElementFactory.make('queue')
+            self.filesink = Gst.ElementFactory.make('filesink')
+            self.filesink.set_property('location', self.config['recording']['path'])
+            # Create video encoding elements
+            self.video_encode_queue = self.make_thread_queue()
+            self.video_encode = Gst.ElementFactory.make('x264enc')
+            self.video_mux_queue = self.make_thread_queue()
+            # Add and link video encoding elements
+            self.pipeline.add(self.video_encode_queue)
+            self.pipeline.add(self.video_encode)
+            self.pipeline.add(self.video_mux_queue)
+            self.pipeline.add(self.mux)
+            self.pipeline.add(self.filesink_queue)
+            self.pipeline.add(self.filesink)
+            self.video_encode_convert.link(self.video_encode_queue)
+            self.video_encode_queue.link(self.video_encode)
+            self.video_encode.link(self.video_mux_queue)
+            self.video_mux_queue.link(self.mux)
+            self.mux.link(self.filesink_queue)
+            self.filesink_queue.link(self.filesink)
+            # Configure video encoder
+            if not self.config['recording']['preset'] == '':
+                self.video_encode.set_property('speed-preset', self.config['recording']['preset'])
+            if not self.config['recording']['target'] == '':
+                target = {'bitrate': 'cbr', 'quantizer': 'quant', 'quality': 'qual'}
+                self.video_encode.set_property('pass', target[self.config['recording']['target']])
+            if not self.config['recording']['bitrate'] == '':
+                self.video_encode.set_property('bitrate', int(self.config['recording']['bitrate']))
+            if not self.config['recording']['quantizer'] == '':
+                self.video_encode.set_property('quantizer', int(self.config['recording']['quantizer']))
+            if not self.config['recording']['option_string'] == '':
+                self.video_encode.set_property('option-string', self.config['recording']['option_string'])
+            # Configure audio pipeline
+            if not self.config['audio']['device'] == 'None' and not self.config['audio']['device'] == '':
+                audio_device = None
+                for device in self.audio_devices:
+                    if device.label == self.config['audio']['device']:
+                        audio_device = device.device
+                        break
+                if not audio_device == None:
+                    # Create audio encoding elements
+                    self.audio_source = Gst.ElementFactory.make('pulsesrc')
+                    self.audio_convert_queue = self.make_thread_queue()
+                    self.audio_convert = Gst.ElementFactory.make('audioconvert')
+                    self.audio_encode_queue = self.make_thread_queue()
+                    self.audio_encode = Gst.ElementFactory.make('lamemp3enc')
+                    self.audio_mux_queue = self.make_thread_queue()
+                    # Configure audio source
+                    device_properties = audio_device.get_properties()
+                    device_id = None
+                    udev_id = device_properties.get_string('udev.id')
+                    if udev_id:
+                        device_id = udev_id
+                    else:
+                        device_id = device_properties.get_string('device.bus_path').replace(':', '_')
+                    profile_name = device_properties.get_string('device.profile.name')
+                    self.audio_source.set_property('device', 'alsa_input.%s.%s' % (device_id, profile_name))
+                    # Configure audio encoder
+                    self.audio_encode.set_property('target', 'bitrate')
+                    self.audio_encode.set_property('cbr', True)
+                    self.audio_encode.set_property('bitrate', 320)
+                    # Add and link audio encoding elements
+                    self.pipeline.add(self.audio_source)
+                    self.pipeline.add(self.audio_convert_queue)
+                    self.pipeline.add(self.audio_convert)
+                    self.pipeline.add(self.audio_encode_queue)
+                    self.pipeline.add(self.audio_encode)
+                    self.pipeline.add(self.audio_mux_queue)
+                    self.audio_source.link(self.audio_convert_queue)
+                    self.audio_convert_queue.link(self.audio_convert)
+                    self.audio_convert.link(self.audio_encode_queue)
+                    self.audio_encode_queue.link(self.audio_encode)
+                    self.audio_encode.link(self.audio_mux_queue)
+                    self.audio_mux_queue.link(self.mux)
+            # Start pipeline
+            self.start_playing()
+            self.window.set_recording_enabled(True)
+
+    def stop_recording(self, window = None):
+        if self.pipeline.get_state(10).state == Gst.State.PLAYING:
+            self.pipeline.send_event(Gst.Event.new_eos())
+
+    def handle_sync(self, bus, message):
+        if message.get_structure().get_name() == 'prepare-window-handle':
+            if self.display_type == 'X11Display':
+                imagesink = message.src
+                imagesink.set_property('force-aspect-ratio', False)
+                imagesink.set_window_handle(self.window.video.get_property('window').get_xid())
+
+    def handle_message(self, bus, message):
+        struct = message.get_structure()
+        if struct == None:
+            print(message.type)
+        else:
+            print(struct.to_string())
+
+    def handle_eos(self, bus, message):
+        # Stop the pipeline
+        self.pipeline.set_state(Gst.State.NULL)
+        # Remove video encoding elements
+        if hasattr(self, 'video_encode_queue'):
+            self.pipeline.remove(self.video_encode_queue)
+            delattr(self, 'video_encode_queue')
+        if hasattr(self, 'video_encode'):
+            self.pipeline.remove(self.video_encode)
+            delattr(self, 'video_encode')
+        if hasattr(self, 'video_mux_queue'):
+            self.pipeline.remove(self.video_mux_queue)
+            delattr(self, 'video_mux_queue')
+        if hasattr(self, 'mux'):
+            self.pipeline.remove(self.mux)
+            delattr(self, 'mux')
+        if hasattr(self, 'filesink_queue'):
+            self.pipeline.remove(self.filesink_queue)
+            delattr(self, 'filesink_queue')
+        if hasattr(self, 'filesink'):
+            self.pipeline.remove(self.filesink)
+            delattr(self, 'filesink')
+        # Remove audio encoding elements
+        if hasattr(self, 'audio_source'):
+            self.pipeline.remove(self.audio_source)
+            delattr(self, 'audio_source')
+        if hasattr(self, 'audio_convert_queue'):
+            self.pipeline.remove(self.audio_convert_queue)
+            delattr(self, 'audio_convert_queue')
+        if hasattr(self, 'audio_convert'):
+            self.pipeline.remove(self.audio_convert)
+            delattr(self, 'audio_convert')
+        if hasattr(self, 'audio_encode_queue'):
+            self.pipeline.remove(self.audio_encode_queue)
+            delattr(self, 'audio_encode_queue')
+        if hasattr(self, 'audio_encode'):
+            self.pipeline.remove(self.audio_encode)
+            delattr(self, 'audio_encode')
+        if hasattr(self, 'audio_mux_queue'):
+            self.pipeline.remove(self.audio_mux_queue)
+            delattr(self, 'audio_mux_queue')
+        # Restart the pipeline
+        if self.active:
+            self.start_playing()
+            self.window.set_recording_enabled(False)
+        else:
+            sys.exit()
+
+    def handle_error(self, bus, message):
+        self.pipeline.set_state(Gst.State.NULL)
+        err, debug = message.parse_error()
+        print('Error: %s' % err, debug)
+
+    def recording_settings_configured(self, window, recording_settings):
+        self.config['recording']['preset'] = recording_settings['preset']
+        self.config['recording']['target'] = recording_settings['target']
+        self.config['recording']['bitrate'] = recording_settings['bitrate']
+        self.config['recording']['quantizer'] = recording_settings['quantizer']
+        self.config['recording']['option_string'] = recording_settings['option_string']
+        self.save_config()
+
+    def handle_delete_event(self, window = None, event = None):
+        self.quit()
+        if self.pipeline.get_state(1).state == Gst.State.PLAYING:
+            return True
+
+    def quit(self):
+        self.active = False
+        self.stop_recording()
+        # This causes problems if we don't remove it before the pipeline is freed
+        self.pipeline.remove(self.video_encode_convert_queue)
+
+sys.exit(GR().run(sys.argv))
