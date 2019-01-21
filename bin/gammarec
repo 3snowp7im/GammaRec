@@ -692,6 +692,7 @@ class GR(Gtk.Application):
             # Create mux elements
             self.mux = Gst.ElementFactory.make('mp4mux')
             self.mux.set_property('faststart', True)
+            self.mux.set_property('faststart-file', self.config['recording']['path'] + '.tmp')
             self.filesink_queue = Gst.ElementFactory.make('queue')
             self.filesink = Gst.ElementFactory.make('filesink')
             self.filesink.set_property('location', self.config['recording']['path'])
