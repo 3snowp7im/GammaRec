@@ -11,7 +11,7 @@ GammaRec is written in Python and relies heavily on Gtk and Gstreamer. You
 may need to install some prerequisites depending on your distribution:
 
 ```shell
-$ sudo apt-get install gstreamer1.0-gtk3 python3 python3-pip
+$ sudo apt-get install gstreamer1.0-libav gstreamer1.0-gtk3 python3 python3-pip
 ```
 
 To get GammaRec, clone this repo using `git` and install using `pip3`:

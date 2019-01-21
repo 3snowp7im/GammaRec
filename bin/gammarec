@@ -247,6 +247,7 @@ class GRRecordingSettingsDialog(Gtk.Dialog):
 
     def __init__(self, parent, recording):
         Gtk.Dialog.__init__(self)
+        self.config = recording
         self.set_transient_for(parent)
         self.set_title('Configure recording settings')
         self.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL, Gtk.STOCK_OK, Gtk.ResponseType.OK)
@@ -261,7 +262,7 @@ class GRRecordingSettingsDialog(Gtk.Dialog):
         preset_renderer_text = Gtk.CellRendererText()
         self.preset_combo.pack_start(preset_renderer_text, True)
         self.preset_combo.add_attribute(preset_renderer_text, "text", 0)
-        self.preset_combo.set_active(self.presets.index(recording.get('device', 'ultrafast')))
+        self.preset_combo.set_active(self.presets.index(self.config.get('device', 'ultrafast')))
         target_label = Gtk.Label()
         target_label.set_halign(Gtk.Align.START)
         target_label.set_text('Target: ')
@@ -273,24 +274,42 @@ class GRRecordingSettingsDialog(Gtk.Dialog):
         target_renderer_text = Gtk.CellRendererText()
         self.target_combo.pack_start(target_renderer_text, True)
         self.target_combo.add_attribute(target_renderer_text, "text", 0)
-        self.target_combo.set_active(self.targets.index(recording.get('target', 'bitrate')))
+        self.target_combo.set_active(self.targets.index(self.config.get('target', 'bitrate')))
         bitrate_label = Gtk.Label()
         bitrate_label.set_halign(Gtk.Align.START)
         bitrate_label.set_text('Bitrate: ')
         self.bitrate_entry = Gtk.Entry()
-        self.bitrate_entry.set_text(recording.get('bitrate', ''))
+        self.bitrate_entry.set_text(self.config.get('bitrate', ''))
         quantizer_label = Gtk.Label()
         quantizer_label.set_halign(Gtk.Align.START)
         quantizer_label.set_text('Quantizer: ')
         self.quantizer_spin = Gtk.SpinButton()
         self.quantizer_spin.set_range(0, 50)
         self.quantizer_spin.set_increments(1, 0)
-        self.quantizer_spin.set_value(int(recording.get('quantizer', '')))
+        self.quantizer_spin.set_value(int(self.config.get('quantizer', '')))
         option_string_label = Gtk.Label()
         option_string_label.set_halign(Gtk.Align.START)
         option_string_label.set_text('Option string: ')
         self.option_string_entry = Gtk.Entry()
-        self.option_string_entry.set_text(recording.get('option_string', ''))
+        self.option_string_entry.set_text(self.config.get('option_string', ''))
+        audio_bitrate_label = Gtk.Label()
+        audio_bitrate_label.set_halign(Gtk.Align.START)
+        audio_bitrate_label.set_text('Audio bitrate: ')
+        self.audio_bitrate_entry = Gtk.Entry()
+        self.audio_bitrate_entry.set_text(self.config.get('bitrate', '256'))
+        audio_codec_label = Gtk.Label()
+        audio_codec_label.set_halign(Gtk.Align.START)
+        audio_codec_label.set_text('Audio codec:')
+        self.audio_codecs = ['aac', 'pcm']
+        audio_codec_store = Gtk.ListStore(str)
+        for codec in self.audio_codecs:
+            audio_codec_store.append([codec])
+        self.audio_codec_combo = Gtk.ComboBox.new_with_model(audio_codec_store)
+        audio_codec_renderer_text = Gtk.CellRendererText()
+        self.audio_codec_combo.pack_start(audio_codec_renderer_text, True)
+        self.audio_codec_combo.add_attribute(audio_codec_renderer_text, "text", 0)
+        self.audio_codec_combo.connect('changed', self.audio_codec_changed)
+        self.audio_codec_combo.set_active(self.audio_codecs.index(self.config.get('audio_codec', 'aac')))
         grid = Gtk.Grid()
         grid.attach(preset_label, 0, 0, 1, 1)
         grid.attach(self.preset_combo, 1, 0, 1, 1)
@@ -302,25 +321,36 @@ class GRRecordingSettingsDialog(Gtk.Dialog):
         grid.attach(self.quantizer_spin, 1, 3, 1, 1)
         grid.attach(option_string_label, 0, 4, 1, 1)
         grid.attach(self.option_string_entry, 1, 4, 1, 1)
+        grid.attach(audio_codec_label, 0, 5, 1, 1)
+        grid.attach(self.audio_codec_combo, 1, 5, 1, 1)
+        grid.attach(audio_bitrate_label, 0, 6, 1, 1)
+        grid.attach(self.audio_bitrate_entry, 1, 6, 1, 1)
         box = Gtk.Box()
         box.pack_start(grid, False, False, 12)
         self.get_content_area().add(box)
         self.show_all()
 
-    def get_preset(self):
-        return self.presets[self.preset_combo.get_active()]
+    def get_audio_codec(self):
+        return self.audio_codecs[self.audio_codec_combo.get_active()]
 
-    def get_target(self):
-        return self.targets[self.target_combo.get_active()]
+    def audio_codec_changed(self, combo):
+        if self.get_audio_codec() == 'aac':
+            self.audio_bitrate_entry.set_sensitive(True)
+            self.audio_bitrate_entry.set_text(self.config.get('audio_bitrate', '256'))
+        else:
+            self.audio_bitrate_entry.set_sensitive(False)
+            self.audio_bitrate_entry.set_text('')
 
-    def get_bitrate(self):
-        return self.bitrate_entry.get_text()
-
-    def get_quantizer(self):
-        return str(int(self.quantizer_spin.get_value()))
-
-    def get_option_string(self):
-        return self.option_string_entry.get_text()
+    def get_settings(self):
+        return {
+            'preset': self.presets[self.preset_combo.get_active()],
+            'target': self.targets[self.target_combo.get_active()],
+            'bitrate': self.bitrate_entry.get_text(),
+            'quantizer': str(int(self.quantizer_spin.get_value())),
+            'option_string': self.option_string_entry.get_text(),
+            'audio_codec': self.get_audio_codec(),
+            'audio_bitrate': self.audio_bitrate_entry.get_text(),
+        }
 
 class GRMainWindow(Gtk.ApplicationWindow):
 
@@ -468,11 +498,7 @@ class GRMainWindow(Gtk.ApplicationWindow):
         dialog = GRRecordingSettingsDialog(self, self.config['recording'])
         response = dialog.run()
         if response == Gtk.ResponseType.OK:
-            self.config['recording']['preset'] = dialog.get_preset()
-            self.config['recording']['target'] = dialog.get_target()
-            self.config['recording']['bitrate'] = dialog.get_bitrate()
-            self.config['recording']['quantizer'] = dialog.get_quantizer()
-            self.config['recording']['option_string'] = dialog.get_option_string()
+            self.config['recording'] = {**self.config['recording'], **dialog.get_settings()}
             self.emit('recording-settings-configured', self.config['recording'])
         dialog.destroy()
 
@@ -576,6 +602,8 @@ class GR(Gtk.Application):
             'bitrate': '5000',
             'quantizer': '21',
             'option_string': '',
+            'audio_codec': 'aac',
+            'audio_bitrate': '256',
         }
         self.config['video'] = {
             'device': '',
@@ -700,9 +728,7 @@ class GR(Gtk.Application):
             # Stop pipeline while adding and configure elements
             self.pipeline.set_state(Gst.State.NULL)
             # Create mux elements
-            self.mux = Gst.ElementFactory.make('mp4mux')
-            self.mux.set_property('faststart', True)
-            self.mux.set_property('faststart-file', self.config['recording']['path'] + '.tmp')
+            self.mux = Gst.ElementFactory.make('flvmux')
             self.filesink_queue = Gst.ElementFactory.make('queue')
             self.filesink = Gst.ElementFactory.make('filesink')
             self.filesink.set_property('location', self.config['recording']['path'])
@@ -745,11 +771,12 @@ class GR(Gtk.Application):
                 if not audio_device == None:
                     # Create audio encoding elements
                     self.audio_source = Gst.ElementFactory.make('pulsesrc')
-                    self.audio_convert_queue = self.make_thread_queue()
-                    self.audio_convert = Gst.ElementFactory.make('audioconvert')
-                    self.audio_encode_queue = self.make_thread_queue()
-                    self.audio_encode = Gst.ElementFactory.make('lamemp3enc')
                     self.audio_mux_queue = self.make_thread_queue()
+                    if self.config['recording']['audio_codec'] == 'aac':
+                        self.audio_convert_queue = self.make_thread_queue()
+                        self.audio_convert = Gst.ElementFactory.make('audioconvert')
+                        self.audio_encode_queue = self.make_thread_queue()
+                        self.audio_encode = Gst.ElementFactory.make('avenc_aac')
                     # Configure audio source
                     device_properties = audio_device.get_properties()
                     device_id = None
@@ -761,21 +788,26 @@ class GR(Gtk.Application):
                     profile_name = device_properties.get_string('device.profile.name')
                     self.audio_source.set_property('device', 'alsa_input.%s.%s' % (device_id, profile_name))
                     # Configure audio encoder
-                    self.audio_encode.set_property('target', 'bitrate')
-                    self.audio_encode.set_property('cbr', True)
-                    self.audio_encode.set_property('bitrate', 320)
+                    if self.config['recording']['audio_codec'] == 'aac':
+                        audio_bitrate = int(self.config['recording']['audio_bitrate'])
+                        if audio_bitrate == 0:
+                            audio_bitrate = 256
+                        self.audio_encode.set_property('bitrate', audio_bitrate * 1000)
                     # Add and link audio encoding elements
                     self.pipeline.add(self.audio_source)
-                    self.pipeline.add(self.audio_convert_queue)
-                    self.pipeline.add(self.audio_convert)
-                    self.pipeline.add(self.audio_encode_queue)
-                    self.pipeline.add(self.audio_encode)
                     self.pipeline.add(self.audio_mux_queue)
-                    self.audio_source.link(self.audio_convert_queue)
-                    self.audio_convert_queue.link(self.audio_convert)
-                    self.audio_convert.link(self.audio_encode_queue)
-                    self.audio_encode_queue.link(self.audio_encode)
-                    self.audio_encode.link(self.audio_mux_queue)
+                    if self.config['recording']['audio_codec'] == 'aac':
+                        self.pipeline.add(self.audio_convert_queue)
+                        self.pipeline.add(self.audio_convert)
+                        self.pipeline.add(self.audio_encode_queue)
+                        self.pipeline.add(self.audio_encode)
+                        self.audio_source.link(self.audio_convert_queue)
+                        self.audio_convert_queue.link(self.audio_convert)
+                        self.audio_convert.link(self.audio_encode_queue)
+                        self.audio_encode_queue.link(self.audio_encode)
+                        self.audio_encode.link(self.audio_mux_queue)
+                    else:
+                        self.audio_source.link(self.audio_mux_queue)
                     self.audio_mux_queue.link(self.mux)
             # Start pipeline
             self.start_playing()
@@ -859,6 +891,8 @@ class GR(Gtk.Application):
         self.config['recording']['bitrate'] = recording_settings['bitrate']
         self.config['recording']['quantizer'] = recording_settings['quantizer']
         self.config['recording']['option_string'] = recording_settings['option_string']
+        self.config['recording']['audio_codec'] = recording_settings['audio_codec']
+        self.config['recording']['audio_bitrate'] = recording_settings['audio_bitrate']
         self.save_config()
 
     def handle_delete_event(self, window = None, event = None):
