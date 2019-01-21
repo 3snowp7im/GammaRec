@@ -12,7 +12,6 @@ import os
 import re
 import signal
 import sys
-import time
 
 class GRVideoDevice:
 
@@ -338,6 +337,7 @@ class GRMainWindow(Gtk.ApplicationWindow):
     def __init__(self, app, config, video_devices, audio_devices):
         Gtk.Window.__init__(self, title='GammaRec', application=app)
         self.config = config
+        self.record_duration = 0
         self.set_resizable(False)
         # Create video device button
         self.video_device_button = Gtk.Button.new_from_icon_name('camera-video-symbolic', Gtk.IconSize.LARGE_TOOLBAR)
@@ -418,8 +418,14 @@ class GRMainWindow(Gtk.ApplicationWindow):
     def stop_clicked(self, button):
         self.emit('recording-stop')
 
+    def set_recording_stopped(self, stopped):
+        self.recording_stopped = stopped
+        self.stop_button.set_sensitive(not stopped)
+        self.show_recording_duration(True)
+
     def set_recording_enabled(self, enabled):
         self.recording_enabled = enabled
+        self.set_recording_stopped(not enabled)
         if enabled:
             self.recording_path_button.hide()
             self.record_button.hide()
@@ -440,15 +446,19 @@ class GRMainWindow(Gtk.ApplicationWindow):
             self.recording_settings_button.show()
             self.record_duration_label.hide()
 
-    def show_recording_duration(self):
-        self.record_duration_label.set_markup('<span foreground="red"> %02d:%02d:%02d</span>' % (
+    def show_recording_duration(self, stopped = False):
+        color = 'red'
+        if stopped:
+            color = 'black'
+        self.record_duration_label.set_markup('<span foreground="%s"> %02d:%02d:%02d</span>' % (
+            color,
             self.record_duration / (60 * 60),
             (self.record_duration / 60) % 60,
             self.record_duration % 60,
         ))
 
     def recording_duration_tick(self):
-        if self.recording_enabled:
+        if not self.recording_stopped:
             self.record_duration += 1
             self.show_recording_duration()
             return True
@@ -773,6 +783,7 @@ class GR(Gtk.Application):
 
     def stop_recording(self, window = None):
         if self.pipeline.get_state(10).state == Gst.State.PLAYING:
+            self.window.set_recording_stopped(True)
             self.pipeline.send_event(Gst.Event.new_eos())
 
     def handle_sync(self, bus, message):
