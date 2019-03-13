@@ -262,7 +262,7 @@ class GRRecordingSettingsDialog(Gtk.Dialog):
         preset_renderer_text = Gtk.CellRendererText()
         self.preset_combo.pack_start(preset_renderer_text, True)
         self.preset_combo.add_attribute(preset_renderer_text, "text", 0)
-        self.preset_combo.set_active(self.presets.index(self.config.get('device', 'ultrafast')))
+        self.preset_combo.set_active(self.presets.index(self.config.get('preset', 'ultrafast')))
         target_label = Gtk.Label()
         target_label.set_halign(Gtk.Align.START)
         target_label.set_text('Target: ')
