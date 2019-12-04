@@ -749,6 +749,8 @@ class GR(Gtk.Application):
             self.video_mux_queue.link(self.mux)
             self.mux.link(self.filesink_queue)
             self.filesink_queue.link(self.filesink)
+            # Configure muxer
+            self.mux.set_property('streamable', True)
             # Configure video encoder
             if not self.config['recording']['preset'] == '':
                 self.video_encode.set_property('speed-preset', self.config['recording']['preset'])
