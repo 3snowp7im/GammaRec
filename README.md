@@ -34,5 +34,5 @@ performance takes a hit. I recommend running on top of the Wayland X11
 client instead:
 
 ```shell
-GDK_DISPLAY=x11 gammarec
+WAYLAND_DISPLAY=x11 gammarec
 ```
