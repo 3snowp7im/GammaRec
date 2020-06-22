@@ -2,7 +2,7 @@
 
 GammaRec is a video capture recording and preview utility. The main use case
 is recording a feed from a capture device while compositing the source into
-a stream layout using some other screen capture or streaming software such
+a stream layout using some other window capture or streaming software such
 as [OBS](https://obsproject.com).
 
 ![GammaRec Window](data/window.png)
@@ -27,11 +27,12 @@ To run GammaRec, just launch the desktop entry, or run from command line:
 ```shell
 $ gammarec
 ```
+
 ## Wayland
 
 GammaRec supports native Wayland rendering via its fallback element,
-`gtksink`, however, performance takes a hit. Also, you will not be able to
-window capture using OBS's `xcomposite` plugin. By default, the desktop
+`gtksink`, however, performance takes a hit and you will not be able to
+window capture using OBS's `xcomposite` plugin. As a workaround, the desktop
 entry launches in backward compatibility mode. If you are launching from
 command line, the same behavior can be acheived by setting the
 `WAYLAND_DISPLAY` environment variable to `x11`:
