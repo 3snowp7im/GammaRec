@@ -38,7 +38,7 @@ command line, the same behavior can be acheived by setting the
 `WAYLAND_DISPLAY` environment variable to `x11`:
 
 ```shell
-WAYLAND_DISPLAY=x11 gammarec
+$ WAYLAND_DISPLAY=x11 gammarec
 ```
 
 ## Lossless encoding
