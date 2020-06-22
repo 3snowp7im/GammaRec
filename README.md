@@ -43,7 +43,7 @@ $ WAYLAND_DISPLAY=x11 gammarec
 
 ## Lossless encoding
 
-GammaRec supports lossless encoding for both audio and video.
+GammaRec supports lossless encoding for both video and audio.
 
 To enable lossless video encoding, open the encoding options dialog and set the
 `Target` to `quality` and the `Quantizer` to `0`. You do not need to specify a
