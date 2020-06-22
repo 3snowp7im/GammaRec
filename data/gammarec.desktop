@@ -1,5 +1,5 @@
 [Desktop Entry]
 Type=Application
 Name=GammaRec
-Exec=gammarec
+Exec=sh -c "WAYLAND_DISPLAY=x11 gammarec"
 Icon=gammarec
