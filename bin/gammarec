@@ -533,14 +533,12 @@ class GR(Gtk.Application):
         self.video_caps = Gst.ElementFactory.make('capsfilter')
         video_tee_queue = self.make_thread_queue()
         video_preview_convert_queue = self.make_thread_queue()
-        video_preview_convert = Gst.ElementFactory.make('glfilterbin')
-        video_preview_convert.set_property('filter', Gst.ElementFactory.make('glcolorconvert'))
+        video_preview_convert = Gst.ElementFactory.make('videoconvert')
         video_tee = Gst.ElementFactory.make('tee')
         video_sink_queue = self.make_thread_queue()
         # Create encode convert elements
         self.video_encode_convert_queue = self.make_thread_queue()
-        self.video_encode_convert = Gst.ElementFactory.make('glfilterbin')
-        self.video_encode_convert.set_property('filter', Gst.ElementFactory.make('glcolorconvert'))
+        self.video_encode_convert = Gst.ElementFactory.make('videoconvert')
         # Create video sink and preview widget
         video_sink = None
         if self.display_type == 'X11Display':
@@ -730,7 +728,7 @@ class GR(Gtk.Application):
             # Create mux elements
             self.mux = Gst.ElementFactory.make('matroskamux')
             self.mux.set_property('streamable', True)
-            self.filesink_queue = Gst.ElementFactory.make('queue')
+            self.filesink_queue = self.make_thread_queue()
             self.filesink = Gst.ElementFactory.make('filesink')
             self.filesink.set_property('location', self.config['recording']['path'])
             # Create video encoding elements
@@ -750,8 +748,6 @@ class GR(Gtk.Application):
             self.video_mux_queue.link(self.mux)
             self.mux.link(self.filesink_queue)
             self.filesink_queue.link(self.filesink)
-            # Configure muxer
-            self.mux.set_property('streamable', True)
             # Configure video encoder
             if not self.config['recording']['preset'] == '':
                 self.video_encode.set_property('speed-preset', self.config['recording']['preset'])
