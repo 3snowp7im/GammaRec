@@ -543,7 +543,7 @@ class GR(Gtk.Application):
         # Create video sink and preview widget
         video_sink = None
         if self.display_type == 'X11Display':
-            video_sink = Gst.ElementFactory.make('xvimagesink')
+            video_sink = Gst.ElementFactory.make('ximagesink')
             self.window.video = Gtk.DrawingArea()
         else:
             video_sink = Gst.ElementFactory.make('gtksink')
