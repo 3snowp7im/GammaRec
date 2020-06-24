@@ -2,24 +2,19 @@
 
 GammaRec is a video capture recording and preview utility. The main use case
 is recording a feed from a capture device while compositing the source into
-a stream layout using some other window capture or streaming software such
-as [OBS](https://obsproject.com).
+a stream layout using window capture or streaming software such as
+[OBS](https://obsproject.com).
 
 ![GammaRec Window](data/window.png)
+
+## Install
 
 GammaRec is written in Python and relies heavily on Gtk and Gstreamer. You
 may need to install some prerequisites depending on your distribution:
 
 ```shell
 $ sudo apt-get install gstreamer1.0-libav gstreamer1.0-gtk3 python3 python3-pip
-```
-
-To get GammaRec, clone this repo using `git` and install using `pip3`:
-
-```shell
-$ git clone https://github.com/3snowp7im/GammaRec
-$ cd GammaRec
-$ pip3 install .
+$ pip3 install gammarec
 ```
 
 To run GammaRec, just launch the desktop entry, or run from command line:
