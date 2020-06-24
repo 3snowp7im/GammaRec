@@ -533,7 +533,8 @@ class GR(Gtk.Application):
         self.video_caps = Gst.ElementFactory.make('capsfilter')
         video_tee_queue = self.make_thread_queue()
         video_preview_convert_queue = self.make_thread_queue()
-        video_preview_convert = Gst.ElementFactory.make('videoconvert')
+        video_preview_convert = Gst.ElementFactory.make('glfilterbin')
+        video_preview_convert.set_property('filter', Gst.ElementFactory.make('glcolorconvert'))
         video_tee = Gst.ElementFactory.make('tee')
         video_sink_queue = self.make_thread_queue()
         # Create encode convert elements
