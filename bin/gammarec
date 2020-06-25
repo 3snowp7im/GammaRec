@@ -533,8 +533,7 @@ class GR(Gtk.Application):
         self.video_caps = Gst.ElementFactory.make('capsfilter')
         video_tee_queue = self.make_thread_queue()
         video_preview_convert_queue = self.make_thread_queue()
-        video_preview_convert = Gst.ElementFactory.make('glfilterbin')
-        video_preview_convert.set_property('filter', Gst.ElementFactory.make('glcolorconvert'))
+        video_preview_convert = Gst.ElementFactory.make('videoconvert')
         video_tee = Gst.ElementFactory.make('tee')
         video_sink_queue = self.make_thread_queue()
         # Create encode convert elements
@@ -543,7 +542,7 @@ class GR(Gtk.Application):
         # Create video sink and preview widget
         video_sink = None
         if self.display_type == 'X11Display':
-            video_sink = Gst.ElementFactory.make('ximagesink')
+            video_sink = Gst.ElementFactory.make('xvimagesink')
             self.window.video = Gtk.DrawingArea()
         else:
             video_sink = Gst.ElementFactory.make('gtksink')
