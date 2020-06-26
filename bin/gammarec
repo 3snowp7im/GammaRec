@@ -394,18 +394,18 @@ class GRMainWindow(Gtk.ApplicationWindow):
         self.recording_settings_button.connect('clicked', self.recording_settings_clicked)
         self.recording_settings_button.show()
         # Create control area
-        controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        controls.pack_start(self.record_button, False, False, 0)
-        controls.pack_start(self.stop_button, False, False, 0)
-        controls.pack_start(self.recording_path_button, False, False, 0)
-        controls.pack_start(self.video_device_button, False, False, 0)
-        controls.pack_start(self.audio_device_button, False, False, 0)
-        controls.pack_start(self.recording_settings_button, False, False, 0)
-        controls.pack_start(self.record_duration_label, False, False, 0)
-        controls.show()
+        self.controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        self.controls.pack_start(self.record_button, False, False, 0)
+        self.controls.pack_start(self.stop_button, False, False, 0)
+        self.controls.pack_start(self.recording_path_button, False, False, 0)
+        self.controls.pack_start(self.video_device_button, False, False, 0)
+        self.controls.pack_start(self.audio_device_button, False, False, 0)
+        self.controls.pack_start(self.recording_settings_button, False, False, 0)
+        self.controls.pack_start(self.record_duration_label, False, False, 0)
+        self.controls.show()
         # Add a vertical column
         self.main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        self.main_box.pack_start(controls, False, False, 0)
+        self.main_box.pack_start(self.controls, False, False, 0)
         self.main_box.show()
         self.add(self.main_box)
 
@@ -532,26 +532,41 @@ class GR(Gtk.Application):
         self.video_source = Gst.ElementFactory.make('v4l2src')
         self.video_caps = Gst.ElementFactory.make('capsfilter')
         video_tee_queue = self.make_thread_queue()
-        video_preview_convert_queue = self.make_thread_queue()
-        video_preview_convert = Gst.ElementFactory.make('videoconvert')
         video_tee = Gst.ElementFactory.make('tee')
-        video_sink_queue = self.make_thread_queue()
+        video_preview_queue = self.make_thread_queue()
+        # Create pipeline
+        self.pipeline = Gst.Pipeline()
         # Create encode convert elements
         self.video_encode_convert_queue = self.make_thread_queue()
         self.video_encode_convert = Gst.ElementFactory.make('videoconvert')
+        # Add elements to pipeline
+        self.pipeline.add(self.video_source)
+        self.pipeline.add(self.video_caps)
+        self.pipeline.add(video_tee_queue)
+        self.pipeline.add(video_tee)
+        self.pipeline.add(video_preview_queue)
+        self.pipeline.add(self.video_encode_convert_queue)
+        self.pipeline.add(self.video_encode_convert)
         # Create video sink and preview widget
-        video_sink = None
         if self.display_type == 'X11Display':
-            video_sink = Gst.ElementFactory.make('xvimagesink')
-            self.window.video = Gtk.DrawingArea()
+            self.video_sink = Gst.ElementFactory.make('glimagesink')
+            self.window.video = Gtk.GLArea()
+            self.pipeline.add(self.video_sink)
+            video_preview_queue.link(self.video_sink)
         else:
-            video_sink = Gst.ElementFactory.make('gtksink')
-            self.window.video = video_sink.props.widget
+            self.video_sink = Gst.ElementFactory.make('gtksink')
+            self.window.video = self.video_sink.props.widget
+            video_convert_queue = self.make_thread_queue()
+            video_convert = Gst.ElementFactory.make('videoconvert')
+            self.pipeline.add(video_convert_queue)
+            self.pipeline.add(video_convert)
+            self.pipeline.add(self.video_sink)
+            video_preview_queue.link(video_convert_queue)
+            video_convert_queue.link(video_convert)
+            video_convert.link(self.video_sink)
         self.window.video.set_size_request(640, 480)
         self.window.video.show()
         self.window.main_box.pack_start(self.window.video, True, True, 0)
-        # Create pipeline
-        self.pipeline = Gst.Pipeline()
         # Set message callbacks
         bus = self.pipeline.get_bus()
         bus.add_signal_watch()
@@ -560,27 +575,13 @@ class GR(Gtk.Application):
         bus.connect("sync-message::element", self.handle_sync)
         bus.connect('message::eos', self.handle_eos)
         bus.connect('message::error', self.handle_error)
-        # Add elements to pipeline
-        self.pipeline.add(self.video_source)
-        self.pipeline.add(self.video_caps)
-        self.pipeline.add(video_tee_queue)
-        self.pipeline.add(video_tee)
-        self.pipeline.add(video_preview_convert_queue)
-        self.pipeline.add(video_preview_convert)
-        self.pipeline.add(video_sink_queue)
-        self.pipeline.add(video_sink)
-        self.pipeline.add(self.video_encode_convert_queue)
-        self.pipeline.add(self.video_encode_convert)
-        # Link preview elements
+        # Link video elements
         self.video_source.link(self.video_caps)
         self.video_caps.link(video_tee_queue)
         video_tee_queue.link(video_tee)
-        video_tee.link(video_preview_convert_queue)
-        video_preview_convert_queue.link(video_preview_convert)
-        video_preview_convert.link(video_sink_queue)
-        video_sink_queue.link(video_sink)
         video_tee.link(self.video_encode_convert_queue)
         self.video_encode_convert_queue.link(self.video_encode_convert)
+        video_tee.link(video_preview_queue)
         # Apply configuration
         self.set_video_capture(self.config['video'])
         self.set_audio_capture(self.config['audio'])
@@ -688,6 +689,8 @@ class GR(Gtk.Application):
                 self.video_caps.set_property('caps', request_caps)
             ratio = ratio_num / ratio_denom
             self.window.video.set_size_request(int(ratio * width), height)
+            if self.display_type == 'X11Display':
+                self.video_sink.set_render_rectangle(0, self.window.controls.get_allocation().height, int(ratio * width), height)
             self.pipeline.set_state(Gst.State.PLAYING)
 
     def get_video_devices(self):
@@ -821,7 +824,6 @@ class GR(Gtk.Application):
         if message.get_structure().get_name() == 'prepare-window-handle':
             if self.display_type == 'X11Display':
                 imagesink = message.src
-                imagesink.set_property('force-aspect-ratio', False)
                 imagesink.set_window_handle(self.window.video.get_property('window').get_xid())
 
     def handle_message(self, bus, message):
