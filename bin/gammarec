@@ -12,6 +12,7 @@ import os
 import re
 import signal
 import sys
+from threading import Timer
 
 class GRVideoDevice:
 
@@ -689,9 +690,9 @@ class GR(Gtk.Application):
                 self.video_caps.set_property('caps', request_caps)
             ratio = ratio_num / ratio_denom
             self.window.video.set_size_request(int(ratio * width), height)
-            self.pipeline.set_state(Gst.State.PLAYING)
             if self.display_type == 'X11Display':
-                self.video_sink.set_render_rectangle(0, self.window.controls.get_allocation().height, int(ratio * width), height)
+                Timer(0.1, lambda: self.video_sink.set_render_rectangle(0, self.window.controls.get_allocation().height, int(ratio * width), height)).start()
+            self.pipeline.set_state(Gst.State.PLAYING)
 
     def get_video_devices(self):
         device_monitor = Gst.DeviceMonitor.new()
