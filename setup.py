@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name = 'GammaRec',
-    version = '1.0.5',
+    version = '1.0.6',
     description = 'Video capture recording and preview.',
     url = 'http://github.com/3snow_p7im/GammaRec',
     author = 'Wild Mouse',
