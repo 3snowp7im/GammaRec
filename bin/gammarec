@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
 import configparser
 import gi
+gi.require_version('Gio', '2.0')
 gi.require_version('GLib', '2.0')
 gi.require_version('GObject', '2.0')
 gi.require_version('Gst', '1.0')
 gi.require_version('GstVideo', '1.0')
 gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
-from gi.repository import GLib, GObject, Gst, GstVideo, Gtk, GdkX11
+from gi.repository import Gio, GLib, GObject, Gst, GstVideo, Gtk, GdkX11
 import os
 import re
 import signal
 import sys
 from threading import Timer
+
+from time import sleep
 
 class GRVideoDevice:
 
@@ -58,7 +61,8 @@ class GRVideoCap:
         if re.search(r'framerate=\(fraction\)\{', cap_str):
             # Introspection is broken for GstFraction, so parse the framerate
             # from gstreamer's human readable string.
-            for string in re.findall(r'framerate=\(fraction\)\{([^}]+)\}', cap_str)[0].strip(' ').split(', '):
+            parts = re.findall(r'framerate=\(fraction\)\{([^}]+)\}', cap_str)[0].strip(' ').split(', ')
+            for string in parts:
                 fraction = string.split('/')
                 framerate = Gst.Fraction()
                 framerate.value_numerator = int(fraction[0])
@@ -256,13 +260,23 @@ class GRRecordingSettingsDialog(Gtk.Dialog):
         preset_label.set_halign(Gtk.Align.START)
         preset_label.set_text('Preset: ')
         preset_store = Gtk.ListStore(str)
-        self.presets = ['ultrafast', 'superfast', 'veryfast', 'faster', 'fast', 'medium', 'slow', 'slower', 'veryslow']
+        self.presets = [
+            'ultrafast',
+            'superfast',
+            'veryfast',
+            'faster',
+            'fast',
+            'medium',
+            'slow',
+            'slower',
+            'veryslow'
+        ]
         for preset in self.presets:
             preset_store.append([preset])
         self.preset_combo = Gtk.ComboBox.new_with_model(preset_store)
         preset_renderer_text = Gtk.CellRendererText()
         self.preset_combo.pack_start(preset_renderer_text, True)
-        self.preset_combo.add_attribute(preset_renderer_text, "text", 0)
+        self.preset_combo.add_attribute(preset_renderer_text, 'text', 0)
         self.preset_combo.set_active(self.presets.index(self.config.get('preset', 'ultrafast')))
         target_label = Gtk.Label()
         target_label.set_halign(Gtk.Align.START)
@@ -274,7 +288,7 @@ class GRRecordingSettingsDialog(Gtk.Dialog):
         self.target_combo = Gtk.ComboBox.new_with_model(target_store)
         target_renderer_text = Gtk.CellRendererText()
         self.target_combo.pack_start(target_renderer_text, True)
-        self.target_combo.add_attribute(target_renderer_text, "text", 0)
+        self.target_combo.add_attribute(target_renderer_text, 'text', 0)
         self.target_combo.set_active(self.targets.index(self.config.get('target', 'bitrate')))
         bitrate_label = Gtk.Label()
         bitrate_label.set_halign(Gtk.Align.START)
@@ -308,9 +322,10 @@ class GRRecordingSettingsDialog(Gtk.Dialog):
         self.audio_codec_combo = Gtk.ComboBox.new_with_model(audio_codec_store)
         audio_codec_renderer_text = Gtk.CellRendererText()
         self.audio_codec_combo.pack_start(audio_codec_renderer_text, True)
-        self.audio_codec_combo.add_attribute(audio_codec_renderer_text, "text", 0)
+        self.audio_codec_combo.add_attribute(audio_codec_renderer_text, 'text', 0)
         self.audio_codec_combo.connect('changed', self.audio_codec_changed)
-        self.audio_codec_combo.set_active(self.audio_codecs.index(self.config.get('audio_codec', 'aac')))
+        codec_index = self.audio_codecs.index(self.config.get('audio_codec', 'aac'))
+        self.audio_codec_combo.set_active(codec_index)
         grid = Gtk.Grid()
         grid.attach(preset_label, 0, 0, 1, 1)
         grid.attach(self.preset_combo, 1, 0, 1, 1)
@@ -371,27 +386,42 @@ class GRMainWindow(Gtk.ApplicationWindow):
         self.record_duration = 0
         self.set_resizable(False)
         # Create video device button
-        self.video_device_button = Gtk.Button.new_from_icon_name('camera-video-symbolic', Gtk.IconSize.LARGE_TOOLBAR)
+        self.video_device_button = Gtk.Button.new_from_icon_name(
+            'camera-video-symbolic',
+            Gtk.IconSize.LARGE_TOOLBAR
+        )
         self.video_device_button.show()
         self.video_device_button.connect('clicked', self.video_device_button_clicked, video_devices)
         # Create audio device button
-        self.audio_device_button = Gtk.Button.new_from_icon_name('audio-input-microphone-symbolic', Gtk.IconSize.LARGE_TOOLBAR)
+        self.audio_device_button = Gtk.Button.new_from_icon_name(
+            'audio-input-microphone-symbolic',
+            Gtk.IconSize.LARGE_TOOLBAR
+        )
         self.audio_device_button.show()
         self.audio_device_button.connect('clicked', self.audio_device_button_clicked, audio_devices)
         # Create button for choosing output recording
-        self.recording_path_button = Gtk.Button.new_from_icon_name('document-save-symbolic', Gtk.IconSize.LARGE_TOOLBAR)
+        self.recording_path_button = Gtk.Button.new_from_icon_name(
+            'document-save-symbolic',
+            Gtk.IconSize.LARGE_TOOLBAR
+        )
         self.recording_path_button.connect('clicked', self.recording_path_clicked)
         self.recording_path_button.show()
         # Create record and stop buttons
         self.record_button = Gtk.Button.new_from_icon_name('media-record', Gtk.IconSize.LARGE_TOOLBAR)
         self.record_button.connect('clicked', self.record_clicked)
         self.record_button.show()
-        self.stop_button = Gtk.Button.new_from_icon_name('media-playback-stop-symbolic', Gtk.IconSize.LARGE_TOOLBAR)
+        self.stop_button = Gtk.Button.new_from_icon_name(
+            'media-playback-stop-symbolic',
+            Gtk.IconSize.LARGE_TOOLBAR
+        )
         self.stop_button.connect('clicked', self.stop_clicked)
         # Create record duration label
         self.record_duration_label = Gtk.Label()
         # Create recording settings button
-        self.recording_settings_button = Gtk.Button.new_from_icon_name('applications-system-symbolic', Gtk.IconSize.LARGE_TOOLBAR)
+        self.recording_settings_button = Gtk.Button.new_from_icon_name(
+            'applications-system-symbolic',
+            Gtk.IconSize.LARGE_TOOLBAR
+        )
         self.recording_settings_button.connect('clicked', self.recording_settings_clicked)
         self.recording_settings_button.show()
         # Create control area
@@ -433,7 +463,12 @@ class GRMainWindow(Gtk.ApplicationWindow):
         dialog.set_transient_for(self)
         dialog.set_title('Save as')
         dialog.set_action(Gtk.FileChooserAction.SAVE)
-        dialog.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL, Gtk.STOCK_APPLY, Gtk.ResponseType.APPLY)
+        dialog.add_buttons(
+            Gtk.STOCK_CANCEL,
+            Gtk.ResponseType.CANCEL,
+            Gtk.STOCK_APPLY,
+            Gtk.ResponseType.APPLY
+        )
         dialog.set_filename(self.config['recording']['path'])
         response = dialog.run()
         if response == Gtk.ResponseType.APPLY:
@@ -506,8 +541,26 @@ class GRMainWindow(Gtk.ApplicationWindow):
 class GR(Gtk.Application):
 
     def __init__(self):
-        Gtk.Application.__init__(self)
+        super().__init__(flags = Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
         Gst.init(None)
+        self.add_main_option(
+            'verbose',
+            ord('v'),
+            GLib.OptionFlags.NONE,
+            GLib.OptionArg.NONE,
+            'Print gstreamer messages to stdout',
+            None,
+        )
+        self.verbose = False
+
+    def do_command_line(self, command_line):
+        options = command_line.get_options_dict()
+        # Convert GVariantDict -> GVariant -> dict
+        options = options.end().unpack()
+        if 'verbose' in options:
+            self.verbose = True
+        self.activate()
+        return 0
 
     def do_activate(self):
         self.active = True
@@ -555,16 +608,16 @@ class GR(Gtk.Application):
             self.pipeline.add(self.video_sink)
             video_preview_queue.link(self.video_sink)
         else:
+            video_convert = Gst.ElementFactory.make('videoconvert')
+            video_sink_queue = self.make_thread_queue()
             self.video_sink = Gst.ElementFactory.make('gtksink')
             self.window.video = self.video_sink.props.widget
-            video_convert_queue = self.make_thread_queue()
-            video_convert = Gst.ElementFactory.make('videoconvert')
-            self.pipeline.add(video_convert_queue)
             self.pipeline.add(video_convert)
+            self.pipeline.add(video_sink_queue)
             self.pipeline.add(self.video_sink)
-            video_preview_queue.link(video_convert_queue)
-            video_convert_queue.link(video_convert)
-            video_convert.link(self.video_sink)
+            video_preview_queue.link(video_convert)
+            video_convert.link(video_sink_queue)
+            video_sink_queue.link(self.video_sink)
         self.window.video.set_size_request(640, 480)
         self.window.video.show()
         self.window.main_box.pack_start(self.window.video, True, True, 0)
@@ -572,8 +625,8 @@ class GR(Gtk.Application):
         bus = self.pipeline.get_bus()
         bus.add_signal_watch()
         bus.enable_sync_message_emission()
-        #bus.connect('message', self.handle_message)
-        bus.connect("sync-message::element", self.handle_sync)
+        if self.verbose: bus.connect('message', self.handle_message)
+        bus.connect('sync-message::element', self.handle_sync)
         bus.connect('message::eos', self.handle_eos)
         bus.connect('message::error', self.handle_error)
         # Link video elements
@@ -613,7 +666,8 @@ class GR(Gtk.Application):
         self.config['audio'] = {
             'device': '',
         }
-        if os.path.isdir(os.path.expanduser('~/.config')) and os.path.exists(os.path.expanduser('~/.config/gammarec.conf')):
+        if os.path.isdir(os.path.expanduser('~/.config')) \
+           and os.path.exists(os.path.expanduser('~/.config/gammarec.conf')):
             self.config.read(os.path.expanduser('~/.config/gammarec.conf'))
         # Load some defaults
         if self.config['video']['device'] == '' and len(self.video_devices) > 0:
@@ -664,7 +718,8 @@ class GR(Gtk.Application):
         self.save_config()
 
     def start_playing(self):
-        if hasattr(self, 'video_device') and hasattr(self, 'video_cap') and hasattr(self, 'video_framerate'):
+        if hasattr(self, 'video_device') and hasattr(self, 'video_cap') \
+           and hasattr(self, 'video_framerate'):
             self.pipeline.set_state(Gst.State.NULL)
             source_path = self.video_source.get_property('device')
             device_path = self.video_device.device.get_properties().get_string('device.path')
@@ -676,7 +731,7 @@ class GR(Gtk.Application):
             ratio_num = self.video_cap.cap.get_fraction('pixel-aspect-ratio').value_numerator
             ratio_denom = self.video_cap.cap.get_fraction('pixel-aspect-ratio').value_denominator
             request_caps = Gst.Caps.from_string(
-                'video/x-raw, format=%s, width=%d, height=%d, pixel-aspect-ratio=%d/%d, framerate=%d/%d' % (
+                'video/x-raw,format=%s,width=%d,height=%d,pixel-aspect-ratio=%d/%d,framerate=%d/%d' % (
                     self.video_cap.cap.get_string('format'),
                     width,
                     height,
@@ -691,7 +746,11 @@ class GR(Gtk.Application):
             ratio = ratio_num / ratio_denom
             self.window.video.set_size_request(int(ratio * width), height)
             if self.display_type == 'X11Display':
-                Timer(0.1, lambda: self.video_sink.set_render_rectangle(0, self.window.controls.get_allocation().height, int(ratio * width), height)).start()
+                Timer(0.1, lambda: self.video_sink.set_render_rectangle(
+                    0,
+                    self.window.controls.get_allocation().height,
+                    int(ratio * width), height
+                )).start()
             self.pipeline.set_state(Gst.State.PLAYING)
 
     def get_video_devices(self):
@@ -727,7 +786,7 @@ class GR(Gtk.Application):
 
     def start_recording(self, window):
         if self.pipeline.get_state(10).state == Gst.State.PLAYING:
-            # Stop pipeline while adding and configure elements
+            # Stop pipeline while adding and configuring elements
             self.pipeline.set_state(Gst.State.NULL)
             # Create mux elements
             self.mux = Gst.ElementFactory.make('matroskamux')
@@ -763,9 +822,13 @@ class GR(Gtk.Application):
             if not self.config['recording']['quantizer'] == '':
                 self.video_encode.set_property('quantizer', int(self.config['recording']['quantizer']))
             if not self.config['recording']['option_string'] == '':
-                self.video_encode.set_property('option-string', self.config['recording']['option_string'])
+                self.video_encode.set_property(
+                    'option-string',
+                    self.config['recording']['option_string']
+                )
             # Configure audio pipeline
-            if not self.config['audio']['device'] == 'None' and not self.config['audio']['device'] == '':
+            if not self.config['audio']['device'] == 'None' \
+               and not self.config['audio']['device'] == '':
                 audio_device = None
                 for device in self.audio_devices:
                     if device.label == self.config['audio']['device']:
@@ -789,7 +852,10 @@ class GR(Gtk.Application):
                     else:
                         device_id = device_properties.get_string('device.bus_path').replace(':', '_')
                     profile_name = device_properties.get_string('device.profile.name')
-                    self.audio_source.set_property('device', 'alsa_input.%s.%s' % (device_id, profile_name))
+                    self.audio_source.set_property('device', 'alsa_input.%s.%s' % (
+                        device_id,
+                        profile_name
+                    ))
                     # Configure audio encoder
                     if self.config['recording']['audio_codec'] == 'aac':
                         audio_bitrate = int(self.config['recording']['audio_bitrate'])
