@@ -782,7 +782,6 @@ class GR(Gtk.Application):
             self.pipeline.set_state(Gst.State.NULL)
             # Create mux elements
             self.mux = Gst.ElementFactory.make('matroskamux')
-            self.mux.set_property('streamable', True)
             self.filesink_queue = self.make_thread_queue()
             self.filesink = Gst.ElementFactory.make('filesink')
             self.filesink.set_property('location', self.config['recording']['path'])
