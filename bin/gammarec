@@ -728,6 +728,9 @@ class GR(Gtk.Application):
             height = self.video_cap.cap.get_int('height').value
             ratio_num = self.video_cap.cap.get_fraction('pixel-aspect-ratio').value_numerator
             ratio_denom = self.video_cap.cap.get_fraction('pixel-aspect-ratio').value_denominator
+            if ratio_denom == 0:
+                ratio_num = 1
+                ratio_denom = 1
             request_caps = Gst.Caps.from_string(
                 'video/x-raw,format=%s,width=%d,height=%d,pixel-aspect-ratio=%d/%d,framerate=%d/%d' % (
                     self.video_cap.cap.get_string('format'),
@@ -750,6 +753,8 @@ class GR(Gtk.Application):
         device_monitor.add_filter('Video/Source')
         devices = []
         for device in device_monitor.get_devices():
+            if type(device).__name__ == 'GstPipeWireDevice':
+                continue
             loaded_device = GRVideoDevice.load(device)
             if not loaded_device == None:
                 devices.append(loaded_device)
