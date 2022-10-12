@@ -14,7 +14,6 @@ import re
 import signal
 import sys
 from threading import Timer
-
 from time import sleep
 
 class GRVideoDevice:
@@ -23,7 +22,7 @@ class GRVideoDevice:
     def load(cls, device):
         caps = GRVideoDevice.get_caps(device)
         if len(caps) > 0:
-            return GRVideoDevice(device.get_display_name(), device, caps)
+            return GRVideoDevice(device.get_display_name(), device, caps, device.get_properties())
 
     @classmethod
     def get_caps(cls, device):
@@ -36,10 +35,11 @@ class GRVideoDevice:
         device.get_caps().foreach(foreach_cap)
         return caps
 
-    def __init__(self, label, device, caps):
+    def __init__(self, label, device, caps, properties):
         self.label = label
         self.device = device
         self.caps = caps
+        self.properties = properties
 
 class GRVideoCap:
 
@@ -64,14 +64,13 @@ class GRVideoCap:
             parts = re.findall(r'framerate=\(fraction\)\{([^}]+)\}', cap_str)[0].strip(' ').split(', ')
             for string in parts:
                 fraction = string.split('/')
-                framerate = Gst.Fraction()
-                framerate.value_numerator = int(fraction[0])
-                framerate.value_denominator = int(fraction[1])
+                framerate = Gst.Fraction(int(fraction[0]), int(fraction[1]))
                 framerate_ = GRVideoFramerate.parse(framerate)
                 if not framerate_ == None:
                     framerates.append(framerate_)
         else:
-            framerate_ = GRVideoFramerate.parse(cap.get_fraction('framerate'))
+            (_, num, denom) = cap.get_fraction('framerate')
+            framerate_ = GRVideoFramerate.parse(Gst.Fraction(num, denom))
             if not framerate_ == None:
                 framerates.append(framerate_)
         return framerates
@@ -85,9 +84,9 @@ class GRVideoFramerate:
 
     @classmethod
     def parse(cls, framerate):
-        if framerate.value_denominator == 0:
+        if framerate.denom == 0:
             return None
-        fraction = int(100 * float(framerate.value_numerator) / float(framerate.value_denominator))
+        fraction = int(100 * float(framerate.num) / float(framerate.denom))
         if fraction % 100 > 0:
             return GRVideoFramerate(str(fraction / 100.), framerate)
         return GRVideoFramerate(str(int(fraction / 100)), framerate)
@@ -380,11 +379,13 @@ class GRMainWindow(Gtk.ApplicationWindow):
         'recording-settings-configured': (GObject.SignalFlags.RUN_LAST, None, (object,)),
     }
 
-    def __init__(self, app, config, video_devices, audio_devices):
+    def __init__(self, app):
         Gtk.Window.__init__(self, title='GammaRec', application=app)
-        self.config = config
         self.record_duration = 0
         self.set_resizable(False)
+
+    def setup(self, config, video_devices, audio_devices):
+        self.config = config
         # Create video device button
         self.video_device_button = Gtk.Button.new_from_icon_name(
             'camera-video-symbolic',
@@ -542,7 +543,6 @@ class GR(Gtk.Application):
 
     def __init__(self):
         super().__init__(flags = Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
-        Gst.init(None)
         self.add_main_option(
             'verbose',
             ord('v'),
@@ -551,6 +551,16 @@ class GR(Gtk.Application):
             'Print gstreamer messages to stdout',
             None,
         )
+        # Init gstreamer and collect devices
+        Gst.init(None)
+        self.device_monitor = Gst.DeviceMonitor.new()
+        self.device_monitor.add_filter('Video/Source')
+        self.device_monitor.add_filter('Audio/Source')
+        bus = self.device_monitor.get_bus()
+        bus.add_watch(0, self.handle_device_monitor_message)
+        self.device_monitor.set_show_all_devices(True)
+        self.devices = []
+        self.device_monitor.start()
         self.verbose = False
 
     def do_command_line(self, command_line):
@@ -565,14 +575,8 @@ class GR(Gtk.Application):
     def do_activate(self):
         self.active = True
         GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, self.quit)
-        # Get video devices
-        self.video_devices = self.get_video_devices()
-        # Get audio devices
-        self.audio_devices = self.get_audio_devices()
-        # Load configuration
-        self.load_config()
         # Create window
-        self.window = GRMainWindow(self, self.config._sections, self.video_devices, self.audio_devices)
+        self.window = GRMainWindow(self)
         self.window.connect('delete-event', self.handle_delete_event)
         self.window.connect('video-capture-configured', self.video_capture_configured)
         self.window.connect('audio-capture-configured', self.audio_capture_configured)
@@ -582,6 +586,16 @@ class GR(Gtk.Application):
         self.window.connect('recording-settings-configured', self.recording_settings_configured)
         self.window.show()
         self.display_type = self.window.get_display().__class__.__name__
+
+    def setup(self):
+        # Get video devices
+        self.video_devices = self.get_video_devices()
+        # Get audio devices
+        self.audio_devices = self.get_audio_devices()
+        # Load configuration
+        self.load_config()
+        # Setup window.
+        self.window.setup(self.config._sections, self.video_devices, self.audio_devices)
         # Create preview elements
         self.video_source = Gst.ElementFactory.make('v4l2src')
         self.video_caps = Gst.ElementFactory.make('capsfilter')
@@ -738,8 +752,8 @@ class GR(Gtk.Application):
                     height,
                     ratio_num,
                     ratio_denom,
-                    self.video_framerate.framerate.value_numerator,
-                    self.video_framerate.framerate.value_denominator,
+                    self.video_framerate.framerate.num,
+                    self.video_framerate.framerate.denom,
                 )
             )
             if source_caps.to_string() != request_caps.to_string():
@@ -749,25 +763,21 @@ class GR(Gtk.Application):
             self.pipeline.set_state(Gst.State.PLAYING)
 
     def get_video_devices(self):
-        device_monitor = Gst.DeviceMonitor.new()
-        device_monitor.add_filter('Video/Source')
         devices = []
-        for device in device_monitor.get_devices():
-            if type(device).__name__ == 'GstPipeWireDevice':
-                continue
-            loaded_device = GRVideoDevice.load(device)
-            if not loaded_device == None:
-                devices.append(loaded_device)
+        for device in self.devices:
+            if device.get_device_class() == 'Video/Source' and type(device).__name__ == 'GstV4l2Device':
+                loaded_device = GRVideoDevice.load(device)
+                if not loaded_device == None:
+                    devices.append(loaded_device)
         return devices
 
     def get_audio_devices(self):
-        device_monitor = Gst.DeviceMonitor.new()
-        device_monitor.add_filter('Audio/Source')
         devices = [GRAudioDevice('None', None)]
-        for device in device_monitor.get_devices():
-            loaded_device = GRAudioDevice.load(device)
-            if not loaded_device == None:
-                devices.append(loaded_device)
+        for device in self.devices:
+            if device.get_device_class() == 'Audio/Source' and device.get_properties().get_string('device.bus_path'):
+                loaded_device = GRAudioDevice.load(device)
+                if not loaded_device == None:
+                    devices.append(loaded_device)
         return devices
 
     def make_thread_queue(self, name = None):
@@ -883,6 +893,13 @@ class GR(Gtk.Application):
             self.window.set_recording_stopped(True)
             self.pipeline.send_event(Gst.Event.new_eos())
 
+    def handle_device_monitor_message(self, bus, message):
+        if message.type & Gst.MessageType.DEVICE_ADDED:
+            self.devices.append(message.parse_device_added())
+        if not bus.have_pending():
+            self.setup()
+        return GLib.SOURCE_CONTINUE
+
     def handle_sync(self, bus, message):
         if message.get_structure().get_name() == 'prepare-window-handle':
             if self.display_type == 'X11Display':
@@ -949,6 +966,11 @@ class GR(Gtk.Application):
         err, debug = message.parse_error()
         print('Error: %s' % err, debug)
 
+    def handle_delete_event(self, window = None, event = None):
+        self.quit()
+        if self.pipeline.get_state(1).state == Gst.State.PLAYING:
+            return True
+
     def recording_settings_configured(self, window, recording_settings):
         self.config['recording']['preset'] = recording_settings['preset']
         self.config['recording']['target'] = recording_settings['target']
@@ -958,11 +980,6 @@ class GR(Gtk.Application):
         self.config['recording']['audio_codec'] = recording_settings['audio_codec']
         self.config['recording']['audio_bitrate'] = recording_settings['audio_bitrate']
         self.save_config()
-
-    def handle_delete_event(self, window = None, event = None):
-        self.quit()
-        if self.pipeline.get_state(1).state == Gst.State.PLAYING:
-            return True
 
     def quit(self):
         self.active = False
