@@ -604,6 +604,13 @@ class GR(Gtk.Application):
         bus.add_watch(0, self.handle_device_monitor_message)
         self.device_monitor.set_show_all_devices(True)
         self.devices = []
+        self.device_setup_done = False
+        self.device_setup_source = None
+        self.device_monitor_started_type = getattr(
+            Gst.MessageType,
+            'DEVICE_MONITOR_STARTED',
+            None,
+        )
         self.device_monitor.start()
         self.verbose = False
         
@@ -635,6 +642,8 @@ class GR(Gtk.Application):
         self.window.accelerators.connect(key, mod, 0, self.on_quit_accelerator)
         self.window.show()
         self.display_type = self.window.get_display().__class__.__name__
+        if not self.device_setup_done and self.device_setup_source is None:
+            self.device_setup_source = GLib.timeout_add(500, self.finish_device_monitor_setup)
 
     def setup(self):
         if not self.setup_called:
@@ -962,15 +971,49 @@ class GR(Gtk.Application):
             self.window.set_recording_stopped(True)
             self.pipeline.send_event(Gst.Event.new_eos())
 
-    def handle_device_monitor_message(self, bus, message):
-        if message.type & Gst.MessageType.DEVICE_ADDED:
-            device = message.parse_device_added()
-            if device:
-                self.devices.append(device)
-        if not bus.have_pending():
-            self.setup()
-        return GLib.SOURCE_CONTINUE
+    def schedule_device_monitor_setup(self):
+        if self.device_setup_done:
+            return False
 
+        if self.device_setup_source is not None:
+            GLib.source_remove(self.device_setup_source)
+
+        self.device_setup_source = GLib.timeout_add(
+            500,
+            self.finish_device_monitor_setup,
+        )
+
+        return False
+
+    def finish_device_monitor_setup(self):
+        self.device_setup_source = None
+
+        if self.device_setup_done:
+            return False
+
+        if not hasattr(self, 'window') or not hasattr(self, 'display_type'):
+            self.device_setup_source = GLib.timeout_add(
+                500,
+                self.finish_device_monitor_setup,
+            )
+            return False
+
+        self.devices = list(self.device_monitor.get_devices())
+        self.device_setup_done = True
+        self.setup()
+
+        return False
+
+    def handle_device_monitor_message(self, bus, message):
+        if (
+            self.device_monitor_started_type is not None
+            and message.type == self.device_monitor_started_type
+        ):
+            self.schedule_device_monitor_setup()
+        elif message.type == Gst.MessageType.DEVICE_ADDED:
+            self.schedule_device_monitor_setup()
+
+        return GLib.SOURCE_CONTINUE
     def handle_sync(self, bus, message):
         if message.get_structure().get_name() == 'prepare-window-handle':
             if self.display_type == 'X11Display':
