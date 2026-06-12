@@ -55,23 +55,45 @@ class GRVideoCap:
             return [struct.get_value(field)]
         return None
 
+
     @classmethod
     def parse(cls, cap):
         fmt = cls.parse_list_field(cap, 'drm-format')
         if not fmt:
             fmt = cap.get_string('format')
-            if not fmt == None:
+            if fmt is not None:
                 fmt = [fmt]
+
         framerates = GRVideoCap.get_framerates(cap)
+
         if fmt and len(fmt) and len(framerates) > 0:
             caps = []
             widths = cls.parse_list_field(cap, 'width')
+
             for width in widths:
                 height = cap.get_int('height').value
                 par = cap.get_fraction('pixel-aspect-ratio')
+
                 for f in fmt:
-                    label = '%s %dx%d %d:%d' % (f, width, height, par.value_numerator, par.value_denominator)
-                    caps.append(GRVideoCap(label, cap, f, framerates))
+                    label = '%s %dx%d %d:%d' % (
+                        f,
+                        width,
+                        height,
+                        par.value_numerator,
+                        par.value_denominator,
+                    )
+
+                    caps.append(GRVideoCap(
+                        label,
+                        cap,
+                        f,
+                        width,
+                        height,
+                        par.value_numerator,
+                        par.value_denominator,
+                        framerates,
+                    ))
+
             return caps
 
     @classmethod
@@ -95,10 +117,14 @@ class GRVideoCap:
                 framerates.append(framerate_)
         return framerates
 
-    def __init__(self, label, cap, format, framerates):
+    def __init__(self, label, cap, format, width, height, ratio_num, ratio_denom, framerates):
         self.cap = cap
         self.label = label
         self.format = format
+        self.width = width
+        self.height = height
+        self.ratio_num = ratio_num
+        self.ratio_denom = ratio_denom
         self.framerates = framerates
 
 class GRVideoFramerate:
@@ -802,10 +828,10 @@ class GR(Gtk.Application):
             if source_path != device_path:
                 self.video_source.set_property('device', device_path)
             source_caps = self.video_caps.get_property('caps')
-            width = self.video_cap.cap.get_int('width').value
-            height = self.video_cap.cap.get_int('height').value
-            ratio_num = self.video_cap.cap.get_fraction('pixel-aspect-ratio').value_numerator
-            ratio_denom = self.video_cap.cap.get_fraction('pixel-aspect-ratio').value_denominator
+            width = self.video_cap.width
+            height = self.video_cap.height
+            ratio_num = self.video_cap.ratio_num
+            ratio_denom = self.video_cap.ratio_denom
             if ratio_denom == 0:
                 ratio_num = 1
                 ratio_denom = 1
