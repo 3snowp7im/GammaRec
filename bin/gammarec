@@ -58,14 +58,10 @@ class GRVideoCap:
 
     @classmethod
     def parse(cls, cap):
-        fmt = cls.parse_list_field(cap, 'drm-format')
-        if not fmt:
-            fmt = cap.get_string('format')
-            if fmt is not None:
-                fmt = [fmt]
-
+        fmt = cls.parse_list_field(cap, 'format')
+        if fmt:
+            fmt = [value for value in fmt if value != 'DMA_DRM']
         framerates = GRVideoCap.get_framerates(cap)
-
         if fmt and len(fmt) and len(framerates) > 0:
             caps = []
             widths = cls.parse_list_field(cap, 'width')
@@ -686,7 +682,7 @@ class GR(Gtk.Application):
         self.window.setup(self.config._sections, self.video_devices, self.audio_devices)
         # Create preview elements
         self.video_source = Gst.ElementFactory.make('v4l2src')
-        self.video_source.set_property('io-mode', 2)
+        self.video_source.set_property('io-mode', 2)  # GST_V4L2_IO_MMAP
         self.video_caps = Gst.ElementFactory.make('capsfilter')
         video_tee_queue = self.make_thread_queue()
         video_tee = Gst.ElementFactory.make('tee')
