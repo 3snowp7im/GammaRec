@@ -686,6 +686,7 @@ class GR(Gtk.Application):
         self.window.setup(self.config._sections, self.video_devices, self.audio_devices)
         # Create preview elements
         self.video_source = Gst.ElementFactory.make('v4l2src')
+        self.video_source.set_property('io-mode', 2)
         self.video_caps = Gst.ElementFactory.make('capsfilter')
         video_tee_queue = self.make_thread_queue()
         video_tee = Gst.ElementFactory.make('tee')
