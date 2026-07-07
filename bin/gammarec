@@ -8,7 +8,7 @@ gi.require_version('Gst', '1.0')
 gi.require_version('GstVideo', '1.0')
 gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
-from gi.repository import Gio, GLib, GObject, Gst, GstVideo, Gtk, GdkX11
+from gi.repository import Gio, GLib, GObject, Gst, GstVideo, Gtk, Gdk, GdkX11
 from datetime import datetime
 import os
 import re
@@ -444,10 +444,58 @@ class GRMainWindow(Gtk.ApplicationWindow):
 
     def __init__(self, app):
         Gtk.Window.__init__(self, title='GammaRec', application=app)
-        self.record_duration = 0
+        self.set_decorated(False)
         self.set_resizable(False)
+        self.root_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.add(self.root_box)
+
+        titlebar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        titlebar.set_name('gammarec-titlebar')
+        self.root_box.pack_start(titlebar, False, False, 0)
+
+        drag_area = Gtk.EventBox()
+        drag_area.set_visible_window(False)
+        drag_area.set_hexpand(True)
+        drag_area.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        drag_area.connect('button-press-event', self.titlebar_button_press)
+
+        title = Gtk.Label(label='GammaRec')
+        title.set_halign(Gtk.Align.START)
+        title.set_margin_start(8)
+        title.set_margin_end(8)
+        drag_area.add(title)
+        titlebar.pack_start(drag_area, True, True, 0)
+
+        close_button = Gtk.Button.new_from_icon_name(
+            'window-close-symbolic',
+            Gtk.IconSize.BUTTON,
+        )
+        close_button.set_relief(Gtk.ReliefStyle.NONE)
+        close_button.set_tooltip_text('Close')
+        close_button.connect('clicked', self.close_button_clicked)
+        titlebar.pack_end(close_button, False, False, 0)
+
+        self.root_box.show_all()
+
+        self.record_duration = 0
         self.accelerators = Gtk.AccelGroup()
         self.add_accel_group(self.accelerators)
+
+    def titlebar_button_press(self, widget, event):
+        if event.button == 1:
+            self.begin_move_drag(
+                event.button,
+                int(event.x_root),
+                int(event.y_root),
+                event.time,
+            )
+            return True
+        return False
+
+    def close_button_clicked(self, button):
+        # Gtk.Window.close() emits delete-event, preserving GammaRec's
+        # existing cleanup path.
+        self.close()
 
     def setup(self, config, video_devices, audio_devices):
         self.config = config
@@ -504,7 +552,7 @@ class GRMainWindow(Gtk.ApplicationWindow):
         self.main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.main_box.pack_start(self.controls, False, False, 0)
         self.main_box.show()
-        self.add(self.main_box)
+        self.root_box.pack_start(self.main_box, True, True, 0)
 
     def video_device_button_clicked(self, button, devices):
         dialog = GRVideoDeviceDialog(self, devices, self.config['video'])
